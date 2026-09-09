@@ -16,6 +16,8 @@
 
 合计 91 项自动化测试通过（Rust 75、Python 8、前端 8）。此前 v0.1.0 为 73 项，本轮新增 18 项。
 
+功能提交 `4c3348d` 的 [GitHub Windows CI](https://github.com/jiashui2003/course-workbench/actions/runs/34353644419) 也已全部通过，包括上述自动化检查、NSIS 安装包构建和产物上传。
+
 ## v0.2.0 网页与本地导入
 
 - YouTube 真实公开视频在 Rust 与桌面中完成字幕直提、笔记与导出；没有媒体下载和 ASR。Vimeo 样本要求登录、TED 样本解析失败，均未冒充导入成功。

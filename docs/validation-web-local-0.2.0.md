@@ -20,6 +20,7 @@
 - `/without-subtitles`：预览提示下载混合媒体，实际获取 MP4、转换为 16 kHz WAV，再以 small/CUDA 完成 7 个片段，回听文件存在。
 - 同一无字幕网页的 `subtitlesOnly` 任务明确失败，不自动转写。
 - `/unavailable`：503 在 Rust 和桌面界面都显示为请求失败，没有被误报为“无字幕”。
+- 直接输入 `/sample.mp4` 完成媒体直链预览：识别为单份网页媒体、无字幕；未提供时长时显示待检测，并提示需要下载混合媒体后提取音频。此项验证预览，实际媒体下载与转写由前述无字幕网页场景覆盖。
 - 自动化测试另覆盖播放列表、直播/预约、DRM、登录要求、不可读字幕格式与无下载工具。人工字幕不可读而同语言自动字幕可读时，下载命令只请求选中的自动字幕，避免上游优先选择人工轨道。
 
 复现服务命令（`site` 目录需自行放入 `sample.mp4` 与 `lesson.vtt`，不提交个人媒体）：
@@ -51,3 +52,7 @@ Markdown 导出包含真实引用锚点，SRT 保留时间轴，VTT 有正确头
 正式配置下的 `npm run package` 已完成，内置前端通过 TypeScript/Vite 构建，EXE 文件版本与产品版本均为 `0.2.0`。NSIS 安装包为 `Course Workbench_0.2.0_x64-setup.exe`，本地交付副本为 `output/release/Course-Workbench-0.2.0-windows-x64-setup.exe`，大小 12,186,271 字节。
 
 安装包 SHA256：`74b64cdb4aeaaf02644d3b4d4fb4c7157578a5128f0ee517f204884c6bde5918`。同目录提供 `.sha256` 文件。构建结果不等同于安装验证；旧版窗口仍在运行，待保存关闭后再升级及复验，避免丢失未保存的编辑。
+
+本机另将已校验的独立解析器放入 `D:\CourseWorkbenchTools\yt-dlp\yt-dlp.exe`。正式应用仍保留旧设置；升级复验时再配置该路径。开发/集成测试使用独立配置，不覆盖正式资料库。
+
+实现已推送至 `feat/course-workbench-v1`，提交为 [`4c3348d`](https://github.com/jiashui2003/course-workbench/commit/4c3348d29dd6031bfaa82c71326deb7795e5c2c2)。[该提交的 Windows CI](https://github.com/jiashui2003/course-workbench/actions/runs/34353644419) 全部通过，包括 Rust、Python、前端测试、静态检查、Windows 安装包构建及产物上传。这是 GitHub Windows runner 的构建验证，仍不能替代另一台终端上的完整安装使用验证。

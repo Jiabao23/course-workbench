@@ -18,6 +18,6 @@
 - [ ] Complete native file-picker selection and cross-window drag/drop verification. Windows automation capture/activation is unavailable on this instance; path entry is verified, native input completion remains a manual check.
 - [x] Build the normal version 0.2.0 NSIS package, check executable version and record package SHA256.
 - [ ] Install version 0.2.0 and repeat the relevant UI path after the user saves and closes the running older application.
-- [ ] Review staged files for private data, commit, and push the existing feature branch. Keep the existing user library and its historical notes.
+- [x] Review staged files for private data, commit, and push the existing feature branch (`4c3348d`). No media, models, local settings or databases were included. The existing user library and its historical notes remain in place.
 
 Do not copy whole third-party extractors into the app. Use the upstream CLI contract and record the actual tool version in validation notes. No cloud-provider or other-GPU test is implied by this work.
