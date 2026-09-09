@@ -1,0 +1,17 @@
+/.tools/
+/.local-data/
+/target/
+**/node_modules/
+**/dist/
+**/__pycache__/
+**/.pytest_cache/
+**/test-results/
+**/playwright-report/
+*.local.json
+*.log
+.env
+!.env.example
+/output/
+**/gen/schemas/
+**/*.tsbuildinfo
+/.playwright-cli/

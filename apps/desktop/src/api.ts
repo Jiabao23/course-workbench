@@ -1,0 +1,35 @@
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import type { AppSettings,AssetDetail,BenchmarkRecord,Bootstrap,CacheCategory,Job,Note,ResourceReport,SearchHit,Segment,SourcePart,SourcePreview,Transcript } from './types';
+
+export const isDesktop = () => isTauri();
+function call<T>(command:string,args?:Record<string,unknown>):Promise<T> {
+  if (!isDesktop()) return Promise.reject(new Error('请在课程工作台桌面应用中使用此功能。'));
+  return invoke<T>(command,args);
+}
+export const api = {
+  bootstrap:()=>call<Bootstrap>('bootstrap'),
+  probeSource:(source:string)=>call<SourcePreview>('probe_source',{source}),
+  probePart:(source:string,page:number)=>call<SourcePart>('probe_part',{source,page}),
+  createJobs:(source:string,pages:number[],mode:string)=>call<Job[]>('create_jobs',{request:{source,pages,mode}}),
+  cancelJob:(jobId:string)=>call<Job>('cancel_job',{jobId}),
+  retryJob:(jobId:string,useCurrentSettings=false)=>call<Job>('retry_job',{jobId,useCurrentSettings}),
+  assetDetail:(assetId:string)=>call<AssetDetail>('get_asset_detail',{assetId}),
+  saveEdit:(assetId:string,baseTranscriptId:string,segments:Segment[])=>call<Transcript>('save_transcript_edit',{assetId,baseTranscriptId,segments}),
+  activateVersion:(assetId:string,transcriptId:string)=>call<void>('activate_version',{assetId,transcriptId}),
+  ensureAudio:(assetId:string)=>call<Job>('ensure_audio',{assetId}),
+  exportAsset:(assetId:string,format:string,destination:string,transcriptId:string|null=null)=>call<string>('export_asset',{assetId,format,destination,transcriptId}),
+  search:(query:string,assetId:string|null=null)=>call<SearchHit[]>('search_library',{query,assetId}),
+  generateKnowledge:(assetId:string,transcriptId:string,kind:string,question:string|null,segmentIds:string[])=>call<Note>('generate_knowledge',{assetId,transcriptId,kind,question,segmentIds}),
+  saveManualNote:(assetId:string,transcriptId:string,title:string,content:string,segmentIds:string[])=>call<Note>('save_manual_note',{assetId,transcriptId,title,content,segmentIds}),
+  saveSettings:(settings:AppSettings)=>call<AppSettings>('save_settings',{settings}),
+  setApiKey:(apiKey:string)=>call<boolean>('set_api_key',{apiKey}),
+  probeResources:()=>call<ResourceReport>('probe_resources'),
+  benchmarkProfile:(assetId:string,model:string,device:string)=>call<BenchmarkRecord>('benchmark_profile',{assetId,model,device}),
+  listBenchmarks:()=>call<BenchmarkRecord[]>('list_benchmarks'),
+  downloadModel:(model:string)=>call<Record<string,unknown>>('download_model',{model}),
+  cacheInventory:()=>call<CacheCategory[]>('cache_inventory'),
+  clearCache:(category:string)=>call<void>('clear_cache_category',{category}),
+  openExternal:(target:string)=>call<void>('open_external',{target}),
+  openDataFolder:()=>call<void>('open_data_folder'),
+};
+export const errorMessage=(error:unknown)=>error instanceof Error?error.message:String(error);
