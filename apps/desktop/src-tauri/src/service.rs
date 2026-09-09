@@ -8,6 +8,7 @@ use super::{
     profiler::{LocalProfiler, ResourceProfiler, ResourceReport},
     settings::{self, AppSettings},
     source::{self, BilibiliProvider, SourcePart, SourcePreview, SourceProvider},
+    web_source::WebProvider,
 };
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use chrono::{SecondsFormat, Utc};
@@ -102,11 +103,14 @@ struct AuxiliaryGuard<'a> {
     runtime: &'a Runtime,
     id: String,
     control: Arc<ProcessControl>,
+    exclusive: bool,
 }
 impl Drop for AuxiliaryGuard<'_> {
     fn drop(&mut self) {
         self.runtime.controls.lock().unwrap().remove(&self.id);
-        self.runtime.auxiliary_active.store(false, Ordering::SeqCst);
+        if self.exclusive {
+            self.runtime.auxiliary_active.store(false, Ordering::SeqCst);
+        }
     }
 }
 
@@ -192,24 +196,46 @@ impl Runtime {
         })
     }
     pub fn probe_source(&self, input: &str) -> Result<SourcePreview> {
-        if input.trim().starts_with("http://")
-            || input.trim().starts_with("https://")
-            || input.trim().starts_with("BV")
-        {
-            BilibiliProvider::new(&self.settings().cookie_file)?.preview(input)
+        let guard = self.begin_source_probe()?;
+        let settings = self.settings();
+        if source::is_bilibili_source(input) {
+            BilibiliProvider::new(&settings.cookie_file)?.preview(input)
+        } else if input.trim().contains("://") {
+            WebProvider::new(&settings, &guard.control).preview(input)
         } else {
             let mut preview = source::local_preview(input)?;
-            if preview.source_kind == "localMedia" && !self.settings().ffprobe_path.is_empty() {
-                preview.parts[0].duration_ms = media::duration_ms(
-                    &self.settings(),
-                    Path::new(&preview.source),
-                    &ProcessControl::default(),
-                )?;
+            if preview.source_kind == "localMedia" && !settings.ffprobe_path.is_empty() {
+                preview.parts[0].duration_ms =
+                    media::duration_ms(&settings, Path::new(&preview.source), &guard.control)?;
             }
             Ok(preview)
         }
     }
+    fn begin_source_probe(&self) -> Result<AuxiliaryGuard<'_>> {
+        let _gate = self.mutation_gate.lock().unwrap();
+        ensure!(!self.shutting_down.load(Ordering::SeqCst), "应用正在退出");
+        let id = format!("probe-{}", new_id());
+        let control = Arc::new(ProcessControl::default());
+        self.controls
+            .lock()
+            .unwrap()
+            .insert(id.clone(), control.clone());
+        Ok(AuxiliaryGuard {
+            runtime: self,
+            id,
+            control,
+            exclusive: false,
+        })
+    }
     pub fn probe_part(&self, input: &str, page: u32) -> Result<SourcePart> {
+        if !source::is_bilibili_source(input) {
+            return self
+                .probe_source(input)?
+                .parts
+                .into_iter()
+                .find(|part| part.page == page)
+                .context("不存在该处理项");
+        }
         let provider = BilibiliProvider::new(&self.settings().cookie_file)?;
         let preview = provider.preview(input)?;
         let mut part = preview
@@ -291,7 +317,13 @@ impl Runtime {
             };
             let asset = existing
                 .iter()
-                .find(|asset| asset.source == canonical_source)
+                .find(|asset| {
+                    asset.source == canonical_source
+                        || (matches!(preview.source_kind.as_str(), "localMedia" | "subtitle")
+                            && asset.source_kind == preview.source_kind
+                            && dunce::simplified(Path::new(&asset.source))
+                                == dunce::simplified(Path::new(&canonical_source)))
+                })
                 .cloned()
                 .unwrap_or_else(|| Asset {
                     id: new_id(),
@@ -510,28 +542,36 @@ impl Runtime {
                 )?;
                 return Ok(());
             }
-            if asset.source_kind == "bilibili" {
-                job.stage = "检查当前分 P 字幕".into();
+            if matches!(asset.source_kind.as_str(), "bilibili" | "webMedia") {
+                job.stage = "检查来源字幕".into();
                 self.publish(job)?;
-                let provider = BilibiliProvider::new(&settings.cookie_file)?;
+                let provider: Box<dyn SourceProvider + '_> = if asset.source_kind == "bilibili" {
+                    Box::new(BilibiliProvider::new(&settings.cookie_file)?)
+                } else {
+                    Box::new(WebProvider::new(settings, control))
+                };
                 let mut part = snapshot.part.clone();
-                provider.inspect_part(asset.bvid.as_deref().context("缺少 BV 号")?, &mut part)?;
+                provider.inspect_part(asset.bvid.as_deref().unwrap_or(&asset.source), &mut part)?;
                 control.check()?;
                 match part.subtitle_status.as_str() {
                     "available" => {
                         let track = part
                             .subtitles
                             .iter()
-                            .find(|track| track.language.starts_with("zh"))
+                            .find(|track| track.language.starts_with(&settings.language))
                             .or_else(|| part.subtitles.first())
                             .context("字幕列表为空")?;
                         job.stage = "提取可用字幕，无需下载音轨".into();
                         self.publish(job)?;
-                        let segments = provider.subtitles(track)?;
+                        let segments = provider.subtitles(&asset.source, track)?;
                         control.check()?;
                         self.commit_transcript(
                             job,
-                            "bilibiliSubtitle",
+                            if asset.source_kind == "bilibili" {
+                                "bilibiliSubtitle"
+                            } else {
+                                "webSubtitle"
+                            },
                             None,
                             &track.language,
                             &segments,
@@ -546,7 +586,7 @@ impl Runtime {
                         bail!("字幕需要登录。请在设置中配置本人导出的 Cookie，或选择自动转写。")
                     }
                     "absent" if job.mode == "subtitlesOnly" => {
-                        bail!("该分 P 没有可读取字幕，‘仅提取字幕’不会下载音轨或转写。")
+                        bail!("所选来源没有可读取字幕，‘仅提取字幕’不会下载媒体或转写。")
                     }
                     "loginRequired" => {
                         job.stage = "字幕需要登录，准备获取音轨转写".into();
@@ -584,7 +624,11 @@ impl Runtime {
         );
         let audio = media::ensure_audio(settings, &asset, control, |stage, progress| {
             job.stage = if stage == "download" {
-                "只下载音轨"
+                if asset.source_kind == "webMedia" {
+                    "获取来源媒体"
+                } else {
+                    "只下载音轨"
+                }
             } else {
                 "转换回听音频"
             }
@@ -934,7 +978,8 @@ impl Runtime {
         let mut content = course_core::export::export_transcript(
             &transcript,
             &asset.title,
-            asset.bvid.as_ref().map(|_| asset.source.as_str()),
+            matches!(asset.source_kind.as_str(), "bilibili" | "webMedia")
+                .then_some(asset.source.as_str()),
             format,
         )?;
         if format == "md" {
@@ -1121,6 +1166,7 @@ impl Runtime {
             runtime: self,
             id,
             control,
+            exclusive: true,
         })
     }
     pub fn save_settings(&self, new_settings: AppSettings) -> Result<AppSettings> {

@@ -118,38 +118,38 @@ pub fn download(
         if path
             .file_name()
             .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
-            && ["m4a", "aac", "mp3", "webm", "opus", "ogg", "flac"].contains(&extension)
+            && [
+                "m4a", "aac", "mp3", "webm", "opus", "ogg", "flac", "wav", "mp4", "mkv", "mov",
+                "avi", "ts",
+            ]
+            .contains(&extension)
         {
             return Ok(path);
         }
     }
-    let mut command = if settings.yt_dlp_path.is_empty() {
-        let mut command = process::command(&settings.python_path)?;
-        command.args(["-m", "yt_dlp"]);
-        command
-    } else {
-        process::command(&settings.yt_dlp_path)?
-    };
+    let mut command = super::web_source::downloader_command(settings)?;
     let output = directory.join(format!("{}.%(ext)s", asset.id));
-    let source = format!(
-        "https://www.bilibili.com/video/{}?p={}",
-        asset.bvid.as_deref().context("缺少 BV 号")?,
-        asset.page.unwrap_or(1)
-    );
+    let source = if asset.source_kind == "bilibili" {
+        format!(
+            "https://www.bilibili.com/video/{}?p={}",
+            asset.bvid.as_deref().context("缺少 BV 号")?,
+            asset.page.unwrap_or(1)
+        )
+    } else {
+        super::web_source::validate_web_url(&asset.source)?.to_string()
+    };
     command
         .args([
-            "--ignore-config",
-            "--no-playlist",
             "--no-overwrites",
             "--newline",
-            "--socket-timeout",
-            "20",
-            "--retries",
-            "3",
             "--fragment-retries",
             "3",
             "-f",
-            "bestaudio",
+            if asset.source_kind == "bilibili" {
+                "bestaudio"
+            } else {
+                "bestaudio/best"
+            },
             "--progress",
             "--progress-template",
             "download:CW_PROGRESS:%(progress._percent_str)s",
@@ -158,12 +158,6 @@ pub fn download(
             "-o",
         ])
         .arg(&output);
-    if !settings.ffmpeg_path.is_empty() {
-        command.arg("--ffmpeg-location").arg(&settings.ffmpeg_path);
-    }
-    if !settings.cookie_file.is_empty() {
-        command.arg("--cookies").arg(&settings.cookie_file);
-    }
     command.arg("--").arg(source);
     let mut final_path = None;
     process::run_lines(
@@ -203,12 +197,12 @@ pub fn ensure_audio(
     control: &ProcessControl,
     mut progress: impl FnMut(&str, f64) -> Result<()>,
 ) -> Result<PathBuf> {
-    if asset.source_kind == "bilibili" {
+    if matches!(asset.source_kind.as_str(), "bilibili" | "webMedia") {
         if let Some(audio) = asset.audio_path.as_ref().filter(|p| Path::new(p).is_file()) {
             return Ok(PathBuf::from(audio));
         }
     }
-    let source = if asset.source_kind == "bilibili" {
+    let source = if matches!(asset.source_kind.as_str(), "bilibili" | "webMedia") {
         progress("download", 0.0)?;
         download(settings, asset, control, |p| progress("download", p))?
     } else {

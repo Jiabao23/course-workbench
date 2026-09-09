@@ -14,6 +14,10 @@
 
 在设置中选择已有的 Python 可执行文件、Whisper 模型目录、FFmpeg 和 ffprobe。yt-dlp 可以选择独立可执行文件，也可留空并使用所选 Python 的 `yt_dlp` 模块。
 
+其他视频网站的解析和字幕直提都需要 yt-dlp。推荐从 [官方 Releases](https://github.com/yt-dlp/yt-dlp/releases)下载 Windows x64 `yt-dlp.exe`，保存到稳定的本地工具目录，再在设置选择它；可与发布页 `SHA2-256SUMS` 校验。当前验证版本为 2026.08.19，无须向既有 Whisper 环境追加或升级依赖。
+
+YouTube 等部分解析器需要 JavaScript 运行时。安装 [Node.js LTS](https://nodejs.org/)后重启应用，程序会检测 `node.exe` 并提供给 yt-dlp。本机验证使用 Node.js 24。没有 Node.js 时，其他无需 JavaScript 的来源及本地导入仍可使用。更多依赖条件以 [yt-dlp 官方文档](https://github.com/yt-dlp/yt-dlp#dependencies)为准。
+
 本项目开发机验证了 Python 3.12.7、Whisper 20250625、NumPy 1.26.4 和 Torch 2.4.1+cu118；RTX 3050 Laptop 4 GB / 驱动 526.56 可用 small 模型。其他设备应重新检测并小样本验证。
 
 ## 新建 CPU 环境
@@ -26,7 +30,7 @@ powershell -File .\scripts\setup-cpu.ps1 -Directory D:\CourseWorkbenchRuntime -P
 
 脚本只在指定目录创建虚拟环境，使用 [PyTorch 官方 CPU 索引](https://download.pytorch.org/whl/cpu)安装 CPU Torch，再装 Whisper 和 yt-dlp；不修改系统 Python 或现有 bili2text 环境。脚本会输出应填入应用的 Python 路径。下载依赖可能占用数 GB，建议 D 盘。
 
-FFmpeg/ffprobe 从 [FFmpeg 官网 Windows 构建入口](https://ffmpeg.org/download.html#build-windows)获取，解压到独立工具目录，在应用内选择两个 EXE。仅音轨下载不等于下载完整视频；转写与回听会产生 PCM WAV 缓存，需预留磁盘空间。
+FFmpeg/ffprobe 从 [FFmpeg 官网 Windows 构建入口](https://ffmpeg.org/download.html#build-windows)获取，解压到独立工具目录，在应用内选择两个 EXE。网络来源优先独立音轨，没有独立音轨时需下载混合媒体；转写与回听还会产生 PCM WAV 缓存，需预留磁盘空间。
 
 ## NVIDIA CUDA
 
@@ -41,6 +45,10 @@ FFmpeg/ffprobe 从 [FFmpeg 官网 Windows 构建入口](https://ffmpeg.org/downl
 | FFmpeg/ffprobe 不可用 | 选择实际 EXE，确认路径仍存在 |
 | 显存不足 | 保留检查点，选较小模型/CPU，再按当前配置重试 |
 | 字幕需要登录 | 配置本人的 Cookie，或明确选择音轨转写 |
+| 网站要求登录/验证 | 在网站 Cookie 文件中提供该站有效记录，或从本地导入；部分来源的媒体本身也要求登录 |
+| 网站不支持/解析失败 | 先更新 yt-dlp，再确认链接是单视频、网络可访问；可参考上游支持列表与 issue |
+| 多文件拖入被拒绝 | 首版一次选择或拖入一个文件，再逐个添加任务 |
+| 本地路径失效/文件损坏 | 重新选择实际存在的音视频/字幕；文件导入前会检查类型与时长 |
 | API 超时/401/429 | 检查模型名、地址、密钥、额度；已有资料仍可使用 |
 | 凭据存储不可用 | 本地功能可继续；修复 Windows 凭据存储后再配置云端密钥 |
 

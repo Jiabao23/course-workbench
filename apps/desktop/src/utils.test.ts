@@ -26,4 +26,12 @@ describe('explicit source and citation scope',()=>{
     expect(citationTarget(versions,'old',citation)?.segment.text).toBe('old text');
     expect(citationTarget(versions,'unknown',citation)).toBeNull();
   });
+  it('links web sources to supported time positions and preserves other original pages',()=>{
+    const web=(source:string)=>({sourceKind:'webMedia',source,bvid:null} as Asset);
+    expect(new URL(sourceAt(web('https://www.youtube.com/watch?v=sample'),125999)!).searchParams.get('t')).toBe('125');
+    expect(sourceAt(web('https://vimeo.com/12345'),12000)).toBe('https://vimeo.com/12345#t=12s');
+    expect(sourceAt(web('https://media.example.org/lesson.mp4'),5000)).toBe('https://media.example.org/lesson.mp4#t=5');
+    expect(sourceAt(web('https://example.org/lesson'),5000)).toBe('https://example.org/lesson');
+    expect(sourceAt(web('file:///D:/private.wav'),1000)).toBeNull();
+  });
 });

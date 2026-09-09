@@ -95,7 +95,21 @@ Core state owns database; frontend cannot mutate raw paths or issue shell code.
 
 Bootstrap -> {assets,jobs,settings,resources,recommendation,apiKeyConfigured}.
 Source preview -> {source,title,sourceKind,bvid,parts:[{page,cid,title,durationMs,
-subtitleStatus,subtitles:[{language,label,url,format}]}],warnings}.
+subtitleStatus,subtitles:[{language,label,url,format,automatic}]}],warnings}.
+Asset/preview sourceKind: bilibili/localMedia/subtitle/webMedia. Transcript
+sourceKind additionally records bilibiliSubtitle/webSubtitle/whisper/edited.
+Web sources have one part (page=1,cid=null,bvid=null); source is the original
+HTTP(S) webpage or direct media URL. Duration 0 means unknown until probing.
+SourceProvider::subtitles(source,track) receives the page URL for yt-dlp to
+refresh time-limited caption URLs. Metadata and caption requests never download
+media. Web caption formats are SRT/VTT; manual captions precede automatic
+captions within a preferred language. The automatic flag defaults to false when
+reading old job snapshots. Download flags request the chosen caption kind only,
+so an unreadable manual track cannot shadow a readable automatic one of the
+same language. Preview warnings disclose mixed-media
+fallback and unknown duration. No database schema change is needed.
+Native file selection and webview drag/drop accept exactly one supported local
+file; stale preview responses must not overwrite a newer source selection.
 Asset detail -> {asset,transcript:Transcript|null,versions:Transcript[],notes:Note[]}.
 AppSettings -> {dataDir,modelDir,pythonPath,ffmpegPath,ffprobePath,ytDlpPath,
 preset,model,device,threads,gpuConcurrency,language,prompt,

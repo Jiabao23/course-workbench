@@ -9,6 +9,7 @@ pub mod profiler;
 pub mod service;
 pub mod settings;
 pub mod source;
+pub mod web_source;
 
 use service::Runtime;
 use std::sync::Arc;

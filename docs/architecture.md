@@ -5,8 +5,10 @@ flowchart LR
   UI[React 桌面界面] -->|类型化命令| Tauri[Tauri Runtime]
   Tauri --> DB[(SQLite WAL / FTS5)]
   Tauri --> Source[SourceProvider]
-  Source --> Bili[B 站接口 / 本地文件]
-  Tauri --> Media[yt-dlp 音轨 / FFmpeg]
+  Source --> Bili[B 站接口]
+  Source --> Web[yt-dlp 网页 / 直链]
+  Source --> Local[本地文件]
+  Tauri --> Media[yt-dlp 媒体 / FFmpeg]
   Tauri -->|JSON Lines v1| ASR[Python Whisper worker]
   Tauri -->|仅选中的文字| API[KnowledgeProvider]
   Tauri --> Profile[ResourceProfiler]
@@ -18,6 +20,8 @@ flowchart LR
 `crates/core` 不依赖 Tauri。负责不可变文字版本、事务和 FTS 索引、字幕解析/导出、资源候选策略、引用校验。桌面端 `service.rs` 组合 `SourceProvider`、`AsrEngine`、`KnowledgeProvider` 和 `ResourceProfiler`；替换引擎无需改变阅读界面。
 
 桌面命令在阻塞线程池中工作；事件只是刷新提示，数据库是最终状态依据。React 不执行 shell、不直接写数据库，子进程通过参数数组启动。Windows JobObject 管理进程树，主进程退出后其子进程也终止。
+
+`source.rs` 负责 B 站接口、本地文件与来源分流；`web_source.rs` 通过 yt-dlp 的单视频 JSON 构建 `webMedia` 预览，独立获取指定语言 SRT/VTT。元数据与字幕请求均使用 `--skip-download`；媒体路径独立调用 `bestaudio/best`，需要混合媒体时预览先提示。通用预览和字幕进程限时 120 秒并登记退出控制。前端通过 Tauri 文件对话框与 webview 拖入事件获取路径，同一时刻仅接受一个文件，并忽略已失效的预览响应。
 
 ## 存储与一致性
 
@@ -39,7 +43,7 @@ flowchart LR
 
 ## API 与文件边界
 
-接口默认不配置模型。云端必须 HTTPS；明确的回环本机服务可 HTTP。密钥只存 Windows 凭据存储，Cookie 只用于 B 站请求。请求明确携带所查看的 transcript ID 和选中片段；不会默默扩大或截断范围。
+接口默认不配置模型。云端必须 HTTPS；明确的回环本机服务可 HTTP。密钥只存 Windows 凭据存储。网站 Cookie 使用 Netscape 格式：yt-dlp 按域处理，B 站 API 只接收适用于 `api.bilibili.com` 的未过期 Cookie；只有其他网站 Cookie 时 B 站仍可匿名访问。字幕 CDN 与 AI 请求均不携带 B 站 Cookie。AI 请求明确携带所查看的 transcript ID 和选中片段；不会默默扩大或截断范围。
 
 拒绝未知/未声明的引用；输出 Markdown 不渲染原始 HTML 和远程图片。响应读取实际限制 8 MiB，包括 chunked 响应。HTTP 超时、限流、认证失败都返回操作级错误，不改写原文。
 

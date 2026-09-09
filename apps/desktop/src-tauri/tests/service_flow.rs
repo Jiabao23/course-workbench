@@ -74,6 +74,43 @@ fn subtitle_path_completes_without_python_ffmpeg_audio_or_asr() {
     assert!(!app.search("分层", Some(&asset.id)).unwrap().is_empty());
 }
 
+#[cfg(windows)]
+#[test]
+fn reimporting_legacy_windows_paths_preserves_asset_versions_and_notes() {
+    let (_temp, app, source) = runtime();
+    let mut asset = imported(&app, &source);
+    let original = app.asset_detail(&asset.id).unwrap().transcript.unwrap();
+    let note = app
+        .save_manual_note(
+            &asset.id,
+            &original.id,
+            "旧版笔记",
+            "保留原来的出处。",
+            &[original.segments[0].id.clone()],
+        )
+        .unwrap();
+    // Version 0.1.0 persisted std::fs::canonicalize's extended-length path.
+    asset.source = source
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(asset.source.starts_with(r"\\?\"));
+    app.db().upsert_asset(&asset).unwrap();
+
+    let imported_again = imported(&app, &source);
+    assert_eq!(
+        imported_again.id, asset.id,
+        "reimport must reuse the existing local asset"
+    );
+    assert_eq!(app.db().list_assets().unwrap().len(), 1);
+    let detail = app.asset_detail(&asset.id).unwrap();
+    assert_eq!(detail.versions.len(), 2);
+    assert_eq!(detail.notes[0].id, note.id);
+    assert_eq!(detail.notes[0].transcript_id, original.id);
+    assert!(detail.notes[0].stale);
+}
+
 #[test]
 fn playback_paths_resolve_parent_components_and_hide_missing_audio() {
     let (_temp, app, source) = runtime();
@@ -101,6 +138,17 @@ fn playback_paths_resolve_parent_components_and_hide_missing_audio() {
         app.db().get_asset(&asset.id).unwrap().audio_path,
         asset.audio_path
     );
+}
+
+#[test]
+fn web_sources_report_missing_downloader_without_using_the_bilibili_adapter() {
+    let (_temp, app, _source) = runtime();
+    let error = match app.probe_source("https://www.youtube.com/watch?v=public-video") {
+        Ok(_) => panic!("no downloader was configured"),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(error.contains("yt-dlp"), "{error}");
+    assert!(!error.contains("仅支持 bilibili"), "{error}");
 }
 
 #[test]

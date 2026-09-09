@@ -16,6 +16,8 @@ pub struct SubtitleTrack {
     pub label: String,
     pub url: String,
     pub format: String,
+    #[serde(default)]
+    pub automatic: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -43,7 +45,18 @@ pub struct SourcePreview {
 pub trait SourceProvider: Send + Sync {
     fn preview(&self, source: &str) -> Result<SourcePreview>;
     fn inspect_part(&self, bvid: &str, part: &mut SourcePart) -> Result<()>;
-    fn subtitles(&self, track: &SubtitleTrack) -> Result<Vec<Segment>>;
+    fn subtitles(&self, source: &str, track: &SubtitleTrack) -> Result<Vec<Segment>>;
+}
+
+pub fn is_bilibili_source(source: &str) -> bool {
+    let source = source.trim();
+    if source.starts_with("BV") && !source.contains(['/', '\\']) {
+        return true;
+    }
+    Url::parse(source).ok().is_some_and(|url| {
+        url.host_str()
+            .is_some_and(|host| host == "bilibili.com" || host.ends_with(".bilibili.com"))
+    })
 }
 
 pub fn extract_bvid(source: &str) -> Result<String> {
@@ -113,6 +126,7 @@ pub fn classify_subtitles(value: &Value) -> (String, Vec<SubtitleTrack>) {
                     raw.into()
                 },
                 format: "json".into(),
+                automatic: false,
             })
         })
         .collect();
@@ -186,7 +200,7 @@ impl BilibiliProvider {
         let cookie = if cookie_file.trim().is_empty() {
             None
         } else {
-            Some(read_cookie_header(Path::new(cookie_file))?)
+            read_cookie_header(Path::new(cookie_file))?
         };
         Ok(Self { client, cookie })
     }
@@ -240,7 +254,7 @@ impl SourceProvider for BilibiliProvider {
         (part.subtitle_status, part.subtitles) = classify_subtitles(&data);
         Ok(())
     }
-    fn subtitles(&self, track: &SubtitleTrack) -> Result<Vec<Segment>> {
+    fn subtitles(&self, _source: &str, track: &SubtitleTrack) -> Result<Vec<Segment>> {
         let url = Url::parse(&track.url)?;
         let host = url.host_str().unwrap_or("");
         ensure!(
@@ -272,7 +286,7 @@ impl SourceProvider for BilibiliProvider {
     }
 }
 
-fn read_cookie_header(path: &Path) -> Result<HeaderValue> {
+fn read_cookie_header(path: &Path) -> Result<Option<HeaderValue>> {
     ensure!(
         fs::metadata(path).context("无法读取 Cookie 文件")?.len() < 5 * 1024 * 1024,
         "Cookie 文件过大"
@@ -289,8 +303,9 @@ fn read_cookie_header(path: &Path) -> Result<HeaderValue> {
         if fields.len() != 7 {
             continue;
         }
-        let host = fields[0].trim_start_matches('.');
-        if !(host == "bilibili.com" || host.ends_with(".bilibili.com")) {
+        let host = fields[0].trim_start_matches('.').to_ascii_lowercase();
+        let includes_subdomains = fields[1].eq_ignore_ascii_case("true");
+        if host != "api.bilibili.com" && !(host == "bilibili.com" && includes_subdomains) {
             continue;
         }
         let expiry: i64 = fields[4].parse().unwrap_or(0);
@@ -308,18 +323,16 @@ fn read_cookie_header(path: &Path) -> Result<HeaderValue> {
         }
         values.push(format!("{}={}", fields[5], fields[6]));
     }
-    ensure!(
-        !values.is_empty(),
-        "Cookie 文件中没有可用的 B 站 Cookie；请选择 Netscape 格式文件"
-    );
+    if values.is_empty() {
+        return Ok(None);
+    }
     let mut header = HeaderValue::from_str(&values.join("; "))?;
     header.set_sensitive(true);
-    Ok(header)
+    Ok(Some(header))
 }
 
 pub fn local_preview(source: &str) -> Result<SourcePreview> {
-    let path = Path::new(source.trim().trim_matches('"'))
-        .canonicalize()
+    let path = dunce::canonicalize(Path::new(source.trim().trim_matches('"')))
         .context("找不到本地文件")?;
     ensure!(path.is_file(), "请选择文件");
     let format = path
@@ -365,4 +378,49 @@ pub fn local_preview(source: &str) -> Result<SourcePreview> {
         }],
         warnings: vec![],
     })
+}
+
+#[cfg(test)]
+mod cookie_tests {
+    use super::*;
+
+    #[test]
+    fn unrelated_website_cookies_allow_anonymous_bilibili_access() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cookies.txt");
+        fs::write(
+            &path,
+            "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tsession\tOTHER_SITE\n",
+        )
+        .unwrap();
+        let provider = BilibiliProvider::new(path.to_str().unwrap()).unwrap();
+        assert!(provider.cookie.is_none());
+    }
+
+    #[test]
+    fn only_unexpired_cookies_scoped_to_the_bilibili_api_are_sent() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cookies.txt");
+        fs::write(
+            &path,
+            concat!(
+                "# Netscape HTTP Cookie File\n",
+                ".youtube.com\tTRUE\t/\tTRUE\t0\tsession\tOTHER_SITE\n",
+                ".bilibili.com.evil.example\tTRUE\t/\tTRUE\t0\tspoof\tSPOOF\n",
+                "www.bilibili.com\tFALSE\t/\tTRUE\t0\tweb_only\tWEB_ONLY\n",
+                "bilibili.com\tFALSE\t/\tTRUE\t0\troot_only\tROOT_ONLY\n",
+                ".bilibili.com\tTRUE\t/\tTRUE\t1\texpired\tEXPIRED\n",
+                "#HttpOnly_.bilibili.com\tTRUE\t/\tTRUE\t0\tSESSDATA\tTEST_SESSION\n",
+                "api.bilibili.com\tFALSE\t/\tTRUE\t0\tapi_cookie\tTEST_API\n",
+            ),
+        )
+        .unwrap();
+        let provider = BilibiliProvider::new(path.to_str().unwrap()).unwrap();
+        let header = provider.cookie.unwrap();
+        assert_eq!(
+            header.to_str().unwrap(),
+            "SESSDATA=TEST_SESSION; api_cookie=TEST_API"
+        );
+        assert!(header.is_sensitive());
+    }
 }

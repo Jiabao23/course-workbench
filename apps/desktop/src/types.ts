@@ -12,7 +12,7 @@ export interface AppSettings { dataDir:string; modelDir:string; pythonPath:strin
 export interface Bootstrap { assets:Asset[]; jobs:Job[]; settings:AppSettings; resources:SystemResources; recommendation:ResourceRecommendation; apiKeyConfigured:boolean }
 export interface AssetDetail { asset:Asset; transcript:Transcript|null; versions:Transcript[]; notes:Note[] }
 export type SubtitleStatus='available'|'absent'|'loginRequired'|'failed'|'unchecked';
-export interface SubtitleTrack { language:string; label:string; url:string; format:string }
+export interface SubtitleTrack { language:string; label:string; url:string; format:string; automatic:boolean }
 export interface SourcePart { page:number; cid:number|null; title:string; durationMs:number; subtitleStatus:SubtitleStatus; subtitles:SubtitleTrack[] }
 export interface SourcePreview { source:string; title:string; sourceKind:string; bvid:string|null; parts:SourcePart[]; warnings:string[] }
 export interface ResourceReport { resources:SystemResources; recommendation:ResourceRecommendation; models:{name:string;size_bytes:number}[]; dependencies:Record<string,boolean> }
