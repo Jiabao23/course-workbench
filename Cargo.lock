@@ -596,7 +596,7 @@ dependencies = [
 
 [[package]]
 name = "course-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "course-workbench"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",

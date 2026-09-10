@@ -27,6 +27,7 @@ pub struct AppSettings {
     pub llm_context_chars: usize,
     pub cookie_file: String,
     pub setup_complete: bool,
+    pub obsidian_vault: String,
 }
 
 pub fn find_program(names: &[&str]) -> String {
@@ -100,6 +101,7 @@ impl Default for AppSettings {
             llm_context_chars: 24000,
             cookie_file: String::new(),
             setup_complete: false,
+            obsidian_vault: String::new(),
         }
     }
 }
@@ -112,6 +114,12 @@ impl AppSettings {
         self.data_path().join("cache").join(category)
     }
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.obsidian_vault.is_empty()
+                || (Path::new(&self.obsidian_vault).is_absolute()
+                    && Path::new(&self.obsidian_vault).parent().is_some()),
+            "Obsidian 知识库必须是绝对文件夹路径"
+        );
         ensure!(
             Path::new(&self.data_dir).is_absolute(),
             "资料目录必须是绝对路径"

@@ -7,6 +7,7 @@ import { api,errorMessage } from '../api';
 import type { AssetDetail,AppSettings,Citation,Note,Segment,Transcript } from '../types';
 import { citationTarget,durationLabel,safeFilename,selectedText,sourceAt,sourceLabel,timeLabel } from '../utils';
 import { Empty,Modal,Spinner,useConfirm } from './Common';
+import IntegrityPanel from './IntegrityPanel';
 
 function NoteBody({note,onCitation,onError}:{note:Note;onCitation:(citation:Citation)=>void;onError:(error:string)=>void}) {
   const content=note.content.replace(/\[引用:([^\]]+)\]/g,(original,id:string)=>{
@@ -23,13 +24,14 @@ export default function Reader({detail,settings,apiKeyConfigured,onBack,onChange
   const [selected,setSelected]=useState(new Set<string>()),[filter,setFilter]=useState(''),[visible,setVisible]=useState(250),[highlight,setHighlight]=useState(initialJump?.segmentId??''),[busy,setBusy]=useState('');
   const [noteMode,setNoteMode]=useState<'saved'|'manual'|'ai'>('saved'),[noteTitle,setNoteTitle]=useState(''),[noteContent,setNoteContent]=useState(''),[kind,setKind]=useState('summary'),[question,setQuestion]=useState('');
   const [exporting,setExporting]=useState(false),[format,setFormat]=useState('md'),[destination,setDestination]=useState('');
+  const [reviewDirty,setReviewDirty]=useState(false),[reviewEpoch,setReviewEpoch]=useState(0),[vaultFeedback,setVaultFeedback]=useState('');
   const audio=useRef<HTMLAudioElement>(null),list=useRef<HTMLDivElement>(null);const {confirm,dialog}=useConfirm();
   const view=detail.versions.find(v=>v.id===viewId)??detail.transcript;
   const displayed=editing?draft:view?.segments??[];
   const dirty=editing&&draft.some((s,i)=>s.text!==detail.versions.find(v=>v.id===editBase)?.segments[i]?.text);
   const scope=useMemo(()=>selectedText(displayed,selected),[displayed,selected]);
   const filtered=useMemo(()=>displayed.filter(s=>s.text.toLocaleLowerCase().includes(filter.toLocaleLowerCase())),[displayed,filter]);
-  const unsaved=dirty||!!noteTitle.trim()||!!noteContent.trim();
+  const unsaved=reviewDirty||dirty||!!noteTitle.trim()||!!noteContent.trim();
   useEffect(()=>{onDirty(unsaved);return()=>onDirty(false);},[unsaved,onDirty]);
   useEffect(()=>{if(!editing&&!initialJump)setViewId(detail.transcript?.id??'');},[detail.transcript?.id]);
   useEffect(()=>{setSelected(new Set());setVisible(250);},[viewId]);
@@ -40,7 +42,7 @@ export default function Reader({detail,settings,apiKeyConfigured,onBack,onChange
     const timeout=setTimeout(()=>list.current?.querySelector(`[data-segment-id="${CSS.escape(highlight)}"]`)?.scrollIntoView({behavior:'smooth',block:'center'}),50);
     return()=>clearTimeout(timeout);
   },[highlight,viewId,visible,filtered]);
-  async function guarded(action:()=>void){if(unsaved&&!(await confirm('有尚未保存的校对或笔记。继续后会放弃这些修改。')))return;setEditing(false);setNoteTitle('');setNoteContent('');action();}
+  async function guarded(action:()=>void){if(unsaved&&!(await confirm('有尚未保存的校对、笔记或核对结论。继续后会放弃这些修改。')))return;setEditing(false);setNoteTitle('');setNoteContent('');setReviewEpoch(n=>n+1);action();}
   async function changeVersion(id:string){await guarded(()=>{setViewId(id);setFilter('');});}
   async function persistEdit(){if(!view)return;setBusy('保存修订版本');try{const version=await api.saveEdit(detail.asset.id,editBase,draft);setEditing(false);setViewId(version.id);await onChanged();}catch(e){onError(errorMessage(e));}finally{setBusy('');}}
   async function activate(){if(!view)return;setBusy('切换版本');try{await api.activateVersion(detail.asset.id,view.id);await onChanged();}catch(e){onError(errorMessage(e));}finally{setBusy('');}}
@@ -52,13 +54,18 @@ export default function Reader({detail,settings,apiKeyConfigured,onBack,onChange
   function startExport(){if(!view)return;setDestination(`${settings.dataDir.replace(/[\\/]$/,'')}/exports/${safeFilename(detail.asset.title)}-v${view.version}.${format}`);setExporting(true);}
   async function pickExport(){try{const path=await save({defaultPath:destination,filters:[{name:format.toUpperCase(),extensions:[format]}]});if(path)setDestination(path);}catch(e){onError(errorMessage(e));}}
   async function exportNow(){if(!view)return;setBusy('导出文件');try{await api.exportAsset(detail.asset.id,format,destination,view.id);setExporting(false);onError(`已导出：${destination}`);}catch(e){onError(errorMessage(e));}finally{setBusy('');}}
+  async function syncVault(){if(!view)return;if(!settings.obsidianVault){onSettings();return;}if(unsaved){onError('请先保存校对、笔记与核对结论，再同步。');return;}setBusy('同步本地知识库');setVaultFeedback('');try{const result=await api.syncVault(detail.asset.id,view.id);setVaultFeedback(`${result.created?'已创建快照':'此快照已同步，无需重复写入'}：${result.snapshotPath}`);}catch(e){onError(errorMessage(e));}finally{setBusy('');}}
+  async function retranscribe(){if(unsaved){onError('请先保存未完成的编辑。');return;}if(!(await confirm('按当前识别设置重新处理此课程，完成后生成独立文字版本；原文与历史笔记保留。继续？')))return;setBusy('添加重新转写任务');try{await api.createJobs(detail.asset.source,[detail.asset.page??1],'transcribe');await onChanged();}catch(e){onError(errorMessage(e));}finally{setBusy('');}}
+  function seekIssue(ms:number){setFilter('');const target=view?.segments.find(s=>s.endMs>=ms)??view?.segments.at(-1);if(target)void play({...target,startMs:ms});}
   const active=view?.id===detail.asset.activeVersionId;
   const remoteSource=Boolean(sourceAt(detail.asset,0));
   const endpoint=(()=>{try{return new URL(settings.llmBaseUrl).host;}catch{return settings.llmBaseUrl;}})();
   return <div className="reader">
-    <header className="reader-heading"><div className="reader-title"><button className="icon-button" aria-label="返回资料库" onClick={onBack}><ArrowLeft size={19}/></button><div><span className="eyebrow">{sourceLabel(detail.asset)} · {durationLabel(detail.asset.durationMs)}</span><h1 title={detail.asset.title}>{detail.asset.title}</h1></div></div><div className="actions"><button disabled={!view||dirty||!!busy} onClick={startExport}><Download size={16}/>导出</button></div></header>
+    <header className="reader-heading"><div className="reader-title"><button className="icon-button" aria-label="返回资料库" onClick={onBack}><ArrowLeft size={19}/></button><div><span className="eyebrow">{sourceLabel(detail.asset)} · {durationLabel(detail.asset.durationMs)}</span><h1 title={detail.asset.title}>{detail.asset.title}</h1></div></div><div className="actions"><button disabled={!view||unsaved||!!busy} onClick={()=>void syncVault()}>同步到 Obsidian</button><button disabled={!view||dirty||!!busy} onClick={startExport}><Download size={16}/>导出</button></div></header>
     <div className="reader-layout"><section className="transcript-pane" aria-label="文字稿">
-      <div className="transcript-toolbar"><div className="actions"><strong>文字稿</strong>{view&&<select aria-label="文字版本" value={view.id} disabled={editing||!!busy} onChange={e=>void changeVersion(e.target.value)}>{detail.versions.map(version=><option key={version.id} value={version.id}>版本 {version.version}{version.isActive?' · 当前':''}{version.sourceKind==='edited'?' · 校对':''}</option>)}</select>}</div><div className="actions">{view&&!active&&<button disabled={!!busy} onClick={()=>void activate()}><History size={14}/>设为当前版本</button>}{view&&active&&!editing&&<button className="quiet" disabled={!!busy} onClick={()=>{setDraft(view.segments.map(s=>({...s})));setEditBase(view.id);setEditing(true);}}><Edit3 size={15}/>校对</button>}{editing&&<><button disabled={!!busy} onClick={()=>void guarded(()=>{})}>放弃修改</button><button className="primary" disabled={!dirty||!!busy} onClick={()=>void persistEdit()}><Save size={15}/>保存新版本</button></>}</div></div>
+      <div className="transcript-toolbar"><div className="actions"><strong>文字稿</strong>{view&&<select aria-label="文字版本" value={view.id} disabled={editing||!!busy} onChange={e=>void changeVersion(e.target.value)}>{detail.versions.map(version=><option key={version.id} value={version.id}>版本 {version.version}{version.isActive?' · 当前':''}{version.sourceKind==='edited'?' · 校对':''}</option>)}</select>}</div><div className="actions">{view&&!active&&<button disabled={!!busy} onClick={()=>void activate()}><History size={14}/>设为当前版本</button>}{view&&active&&!editing&&<button className="quiet" disabled={!!busy||reviewDirty} onClick={()=>{setDraft(view.segments.map(s=>({...s})));setEditBase(view.id);setEditing(true);}}><Edit3 size={15}/>校对</button>}{editing&&<><button disabled={!!busy} onClick={()=>void guarded(()=>{})}>放弃修改</button><button className="primary" disabled={!dirty||!!busy} onClick={()=>void persistEdit()}><Save size={15}/>保存新版本</button></>}</div></div>
+      {view&&<IntegrityPanel key={`${view.id}-${reviewEpoch}`} assetId={detail.asset.id} transcriptId={view.id} durationMs={detail.asset.durationMs} audioPath={detail.asset.audioPath} disabled={editing||!!busy} canRetranscribe={detail.asset.sourceKind!=='subtitle'} onSeek={seekIssue} onRetranscribe={()=>void retranscribe()} onDirty={setReviewDirty}/>}
+      {vaultFeedback&&<div className="vault-feedback">{vaultFeedback}<button onClick={()=>void api.openVaultNote(detail.asset.id).catch(e=>onError(errorMessage(e)))}>在 Obsidian 打开课程</button></div>}
       {!active&&view&&<div className="version-notice">正在查看历史版本 {view.version}，引用保持与当时原文一致。</div>}
       {detail.asset.audioPath?<div className="audio-bar"><Volume2 size={18}/><audio ref={audio} controls preload="metadata" src={convertFileSrc(detail.asset.audioPath)} aria-label="课程回听"/><button className="icon-button" title="后退 5 秒" aria-label="后退 5 秒" onClick={()=>{if(audio.current)audio.current.currentTime=Math.max(0,audio.current.currentTime-5);}}>−5s</button></div>:remoteSource?<div className="audio-empty"><ExternalLink size={15}/><span>{detail.asset.bvid?'点击时间戳可回到原视频。':'点击时间戳可打开原网页，部分网站支持时间定位。'}</span><button className="text-button" disabled={!!busy} onClick={()=>void getAudio()}>获取本地回听音频</button></div>:null}
       {view?<><div className="text-tools"><div className="small-search"><Search size={15}/><input aria-label="搜索当前文字稿" placeholder="查找原文…" value={filter} onChange={e=>{setFilter(e.target.value);setVisible(250);}}/></div><span className="muted">{filtered.length} 个片段</span></div>

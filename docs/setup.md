@@ -10,6 +10,12 @@
 
 `cw-diagnostic.exe` 是可选诊断程序，正常使用不需要它。运行诊断命令前先退出使用同一资料库的桌面应用；资料库占用锁会拒绝重复打开，避免影响进行中的任务。
 
+## 升级到 v0.3.0 与 Obsidian
+
+升级前保存并退出工作台，备份资料目录及 `%LOCALAPPDATA%\CourseWorkbench\settings.json`。新版本将 SQLite schema 升为 3，保留历史文字和笔记。旧版本不能直接读取 schema 3；如需回退，恢复升级前备份，不修改数据库版本号。
+
+Obsidian 桥接无需 Python 或社区插件。在“设置 → Obsidian 知识库”填写独立目录并保存、初始化，再使用 Obsidian 的“打开文件夹作为仓库”注册同一目录。已注册后，课程页按钮通过 `obsidian://open` 打开课程索引。详细操作和文件冲突处理见[使用指南](user-guide.md)。
+
 ## 复用本机环境
 
 在设置中选择已有的 Python 可执行文件、Whisper 模型目录、FFmpeg 和 ffprobe。yt-dlp 可以选择独立可执行文件，也可留空并使用所选 Python 的 `yt_dlp` 模块。

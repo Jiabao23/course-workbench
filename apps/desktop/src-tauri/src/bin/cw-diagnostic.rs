@@ -24,6 +24,15 @@ fn run() -> Result<()> {
     };
     let runtime = Runtime::new(config, course_workbench_lib::worker_path())?;
     let result = match command.as_str() {
+        "check" => serde_json::to_value(runtime.check_integrity(
+            &args.next().context("missing asset")?,
+            &args.next().context("missing version")?,
+        )?)?,
+        "vault-init" => json!({"path":runtime.initialize_vault()?}),
+        "vault-sync" => serde_json::to_value(runtime.sync_vault(
+            &args.next().context("missing asset")?,
+            &args.next().context("missing version")?,
+        )?)?,
         "diagnose" => serde_json::to_value(runtime.probe_resources()?)?,
         "preview" => {
             serde_json::to_value(runtime.probe_source(&args.next().context("missing source")?)?)?

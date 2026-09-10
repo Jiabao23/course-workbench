@@ -688,6 +688,11 @@ impl Runtime {
             })
             .collect();
         let segments = segments?;
+        super::integrity::require_complete_chunks(
+            job.chunk_done,
+            job.chunk_total,
+            asset.duration_ms,
+        )?;
         ensure!(
             !segments.is_empty(),
             "音频中未识别出有效语音，已有文字版本已保留"
@@ -918,6 +923,71 @@ impl Runtime {
             versions: db.list_transcripts(id)?,
             notes: db.list_notes(id)?,
         })
+    }
+    pub fn check_integrity(
+        &self,
+        asset_id: &str,
+        transcript_id: &str,
+    ) -> Result<super::integrity::IntegrityReport> {
+        let db = self.db();
+        let asset = db.get_asset(asset_id)?;
+        let t = db.get_transcript(transcript_id)?;
+        ensure!(t.asset_id == asset_id, "文字版本不属于当前课程");
+        let job = db.transcript_job(transcript_id)?;
+        let source_duration = job
+            .as_ref()
+            .and_then(|j| self.read_snapshot(&j.id).ok())
+            .map(|s| s.part.duration_ms)
+            .filter(|d| *d > 0);
+        let mut report = super::integrity::check(&asset, &t, job.as_ref(), source_duration);
+        report.review = db
+            .integrity_review(transcript_id, &report.fingerprint)?
+            .map(|(note, reviewed_at)| super::integrity::Review { note, reviewed_at });
+        Ok(report)
+    }
+    pub fn review_integrity(
+        &self,
+        asset_id: &str,
+        transcript_id: &str,
+        fingerprint: &str,
+        note: &str,
+    ) -> Result<super::integrity::IntegrityReport> {
+        let _gate = self.mutation_gate.lock().unwrap();
+        let report = self.check_integrity(asset_id, transcript_id)?;
+        ensure!(
+            report.fingerprint == fingerprint,
+            "检查依据已变化，请刷新报告后重新核对"
+        );
+        self.db()
+            .save_integrity_review(transcript_id, fingerprint, note)?;
+        self.check_integrity(asset_id, transcript_id)
+    }
+    pub fn initialize_vault(&self) -> Result<String> {
+        let _gate = self.mutation_gate.lock().unwrap();
+        super::vault::initialize(Path::new(&self.settings().obsidian_vault))
+    }
+    pub fn sync_vault(
+        &self,
+        asset_id: &str,
+        transcript_id: &str,
+    ) -> Result<super::vault::SyncResult> {
+        let _gate = self.mutation_gate.lock().unwrap();
+        let db = self.db();
+        let asset = db.get_asset(asset_id)?;
+        let t = db.get_transcript(transcript_id)?;
+        let report = self.check_integrity(asset_id, transcript_id)?;
+        let notes: Vec<_> = db
+            .list_notes(asset_id)?
+            .into_iter()
+            .filter(|n| n.transcript_id == transcript_id)
+            .collect();
+        super::vault::sync(
+            Path::new(&self.settings().obsidian_vault),
+            &asset,
+            &t,
+            &notes,
+            &report,
+        )
     }
     pub fn save_edit(
         &self,

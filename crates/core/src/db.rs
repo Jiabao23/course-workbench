@@ -96,7 +96,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS segment_fts USING fts5(
     tokens,
     tokenize='unicode61 remove_diacritics 2'
 );
-PRAGMA user_version = 2;
+CREATE TABLE IF NOT EXISTS integrity_reviews (
+    transcript_id TEXT NOT NULL REFERENCES transcripts(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    note TEXT NOT NULL,
+    reviewed_at TEXT NOT NULL,
+    PRIMARY KEY(transcript_id, fingerprint)
+);
+PRAGMA user_version = 3;
 "#;
 
 const ASSET_COLUMNS: &str = "id, title, source_kind, source, bvid, page, duration_ms, audio_path, active_version_id, created_at, updated_at";
@@ -124,7 +131,7 @@ impl Db {
         let db = Self { path };
         let mut connection = db.connection()?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        ensure!(version <= 2, "数据库版本较新，请升级应用后打开");
+        ensure!(version <= 3, "数据库版本较新，请升级应用后打开");
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction
             .execute_batch(SCHEMA)
@@ -135,6 +142,42 @@ impl Db {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn transcript_job(&self, transcript_id: &str) -> Result<Option<Job>> {
+        let id: Option<String> = self
+            .connection()?
+            .query_row(
+                "SELECT job_id FROM job_transcripts WHERE transcript_id=?1",
+                [transcript_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        id.map(|id| self.get_job(&id)).transpose()
+    }
+    pub fn integrity_review(
+        &self,
+        transcript_id: &str,
+        fingerprint: &str,
+    ) -> Result<Option<(String, String)>> {
+        Ok(self.connection()?.query_row("SELECT note,reviewed_at FROM integrity_reviews WHERE transcript_id=?1 AND fingerprint=?2",params![transcript_id,fingerprint],|r|Ok((r.get(0)?,r.get(1)?))).optional()?)
+    }
+    pub fn save_integrity_review(
+        &self,
+        transcript_id: &str,
+        fingerprint: &str,
+        note: &str,
+    ) -> Result<()> {
+        ensure!(
+            !note.trim().is_empty() && note.chars().count() <= 4000,
+            "请填写 1–4000 字的核对结论"
+        );
+        ensure!(
+            fingerprint.len() == 64 && fingerprint.chars().all(|c| c.is_ascii_hexdigit()),
+            "检查依据标识无效"
+        );
+        self.connection()?.execute("INSERT INTO integrity_reviews(transcript_id,fingerprint,note,reviewed_at) VALUES(?1,?2,?3,?4) ON CONFLICT(transcript_id,fingerprint) DO UPDATE SET note=excluded.note,reviewed_at=excluded.reviewed_at",params![transcript_id,fingerprint,note.trim(),now()])?;
+        Ok(())
     }
 
     fn connection(&self) -> Result<Connection> {

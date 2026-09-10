@@ -2,6 +2,7 @@ pub mod asr;
 pub mod benchmark;
 pub mod cache;
 mod commands;
+pub mod integrity;
 pub mod knowledge;
 pub mod media;
 pub mod process;
@@ -9,6 +10,7 @@ pub mod profiler;
 pub mod service;
 pub mod settings;
 pub mod source;
+pub mod vault;
 pub mod web_source;
 
 use service::Runtime;
@@ -52,6 +54,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::check_integrity,
+            commands::review_integrity,
+            commands::initialize_vault,
+            commands::sync_vault,
+            commands::open_vault_note,
             commands::bootstrap,
             commands::probe_source,
             commands::probe_part,

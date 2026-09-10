@@ -1,5 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import type { AppSettings,AssetDetail,BenchmarkRecord,Bootstrap,CacheCategory,Job,Note,ResourceReport,SearchHit,Segment,SourcePart,SourcePreview,Transcript } from './types';
+import type { AppSettings,AssetDetail,IntegrityReport,VaultSyncResult,BenchmarkRecord,Bootstrap,CacheCategory,Job,Note,ResourceReport,SearchHit,Segment,SourcePart,SourcePreview,Transcript } from './types';
 
 export const isDesktop = () => isTauri();
 function call<T>(command:string,args?:Record<string,unknown>):Promise<T> {
@@ -7,6 +7,11 @@ function call<T>(command:string,args?:Record<string,unknown>):Promise<T> {
   return invoke<T>(command,args);
 }
 export const api = {
+  checkIntegrity:(assetId:string,transcriptId:string)=>call<IntegrityReport>('check_integrity',{assetId,transcriptId}),
+  reviewIntegrity:(assetId:string,transcriptId:string,fingerprint:string,note:string)=>call<IntegrityReport>('review_integrity',{assetId,transcriptId,fingerprint,note}),
+  initializeVault:()=>call<string>('initialize_vault'),
+  syncVault:(assetId:string,transcriptId:string)=>call<VaultSyncResult>('sync_vault',{assetId,transcriptId}),
+  openVaultNote:(assetId:string)=>call<void>('open_vault_note',{assetId}),
   bootstrap:()=>call<Bootstrap>('bootstrap'),
   probeSource:(source:string)=>call<SourcePreview>('probe_source',{source}),
   probePart:(source:string,page:number)=>call<SourcePart>('probe_part',{source,page}),

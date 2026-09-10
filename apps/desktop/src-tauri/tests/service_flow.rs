@@ -74,6 +74,77 @@ fn subtitle_path_completes_without_python_ffmpeg_audio_or_asr() {
     assert!(!app.search("分层", Some(&asset.id)).unwrap().is_empty());
 }
 
+#[test]
+fn integrity_review_and_vault_sync_survive_reopen_without_crossing_versions() {
+    let (temp, app, source) = runtime();
+    let asset = imported(&app, &source);
+    let original = app.asset_detail(&asset.id).unwrap().transcript.unwrap();
+    let report = app.check_integrity(&asset.id, &original.id).unwrap();
+    assert!(report.issues.iter().any(|i| i.code == "unknownDuration"));
+    assert!(app
+        .review_integrity(&asset.id, &original.id, &report.fingerprint, " ")
+        .is_err());
+    app.review_integrity(
+        &asset.id,
+        &original.id,
+        &report.fingerprint,
+        "已对照原始字幕，原字幕是否完整仍需核对课程",
+    )
+    .unwrap();
+    let root = temp.path().join("个人知识库");
+    let mut settings = app.settings();
+    settings.obsidian_vault = root.to_string_lossy().into_owned();
+    app.save_settings(settings).unwrap();
+    app.initialize_vault().unwrap();
+    app.save_manual_note(
+        &asset.id,
+        &original.id,
+        "摘录",
+        "我的理解",
+        &[original.segments[0].id.clone()],
+    )
+    .unwrap();
+    let first = app.sync_vault(&asset.id, &original.id).unwrap();
+    assert!(std::path::Path::new(&first.snapshot_path).is_file());
+    let mut revised = original.segments.clone();
+    revised[0].text.push_str(" 修订");
+    let edited = app.save_edit(&asset.id, &original.id, &revised).unwrap();
+    assert!(app
+        .check_integrity(&asset.id, &edited.id)
+        .unwrap()
+        .review
+        .is_none());
+    assert!(app
+        .check_integrity(&asset.id, &original.id)
+        .unwrap()
+        .review
+        .is_some());
+    let second = app.sync_vault(&asset.id, &edited.id).unwrap();
+    assert_ne!(first.snapshot_path, second.snapshot_path);
+    let config = app.config_path.clone();
+    let worker = app.worker_path.clone();
+    drop(app);
+    let app = Runtime::new(config, worker).unwrap();
+    assert!(app
+        .check_integrity(&asset.id, &original.id)
+        .unwrap()
+        .review
+        .is_some());
+    let mut changed = app.db().get_asset(&asset.id).unwrap();
+    changed.source_kind = "localMedia".into();
+    changed.duration_ms = 60000;
+    app.db().upsert_asset(&changed).unwrap();
+    assert!(app
+        .check_integrity(&asset.id, &original.id)
+        .unwrap()
+        .review
+        .is_none());
+    assert!(app
+        .review_integrity(&asset.id, &original.id, &report.fingerprint, "旧报告")
+        .is_err());
+    assert!(app.check_integrity("another-asset", &original.id).is_err());
+}
+
 #[cfg(windows)]
 #[test]
 fn reimporting_legacy_windows_paths_preserves_asset_versions_and_notes() {

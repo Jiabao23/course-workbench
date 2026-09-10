@@ -13,6 +13,59 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 type Reply<T> = Result<T, String>;
+#[tauri::command]
+pub async fn check_integrity(
+    state: State<'_, Arc<Runtime>>,
+    asset_id: String,
+    transcript_id: String,
+) -> Reply<super::integrity::IntegrityReport> {
+    blocking(state.inner().clone(), move |s| {
+        s.check_integrity(&asset_id, &transcript_id)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn review_integrity(
+    state: State<'_, Arc<Runtime>>,
+    asset_id: String,
+    transcript_id: String,
+    fingerprint: String,
+    note: String,
+) -> Reply<super::integrity::IntegrityReport> {
+    blocking(state.inner().clone(), move |s| {
+        s.review_integrity(&asset_id, &transcript_id, &fingerprint, &note)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn initialize_vault(state: State<'_, Arc<Runtime>>) -> Reply<String> {
+    blocking(state.inner().clone(), move |s| s.initialize_vault()).await
+}
+#[tauri::command]
+pub async fn sync_vault(
+    state: State<'_, Arc<Runtime>>,
+    asset_id: String,
+    transcript_id: String,
+) -> Reply<super::vault::SyncResult> {
+    blocking(state.inner().clone(), move |s| {
+        s.sync_vault(&asset_id, &transcript_id)
+    })
+    .await
+}
+#[tauri::command]
+pub fn open_vault_note(
+    app: AppHandle,
+    state: State<'_, Arc<Runtime>>,
+    asset_id: String,
+) -> Reply<()> {
+    let path = super::vault::index_path(
+        std::path::Path::new(&state.settings().obsidian_vault),
+        &asset_id,
+    )
+    .map_err(|e| e.to_string())?;
+    let uri = super::vault::open_uri(&path).map_err(|e| e.to_string())?;
+    app.opener().open_url(uri,None::<&str>).map_err(|e|format!("无法打开 Obsidian：{e}。请安装并启动 Obsidian，在库管理器中把设置中的知识库文件夹作为仓库打开。Markdown 文件已保存在本地。"))
+}
 async fn blocking<T: Send + 'static>(
     state: Arc<Runtime>,
     work: impl FnOnce(Arc<Runtime>) -> anyhow::Result<T> + Send + 'static,

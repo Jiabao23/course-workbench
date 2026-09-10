@@ -113,4 +113,35 @@ file; stale preview responses must not overwrite a newer source selection.
 Asset detail -> {asset,transcript:Transcript|null,versions:Transcript[],notes:Note[]}.
 AppSettings -> {dataDir,modelDir,pythonPath,ffmpegPath,ffprobePath,ytDlpPath,
 preset,model,device,threads,gpuConcurrency,language,prompt,
-llmBaseUrl,llmModel,llmContextChars,cookieFile,setupComplete} (no API key).
+llmBaseUrl,llmModel,llmContextChars,cookieFile,obsidianVault,setupComplete} (no API key).
+
+## Integrity and local vault (desktop v0.3.0)
+
+SQLite schema 3 adds integrity_reviews keyed by transcript ID and evidence
+fingerprint. Reviews never change immutable transcript text or processing evidence.
+Back up schema 2 databases before upgrade; old binaries cannot open schema 3.
+
+Commands: check_integrity(assetId,transcriptId),
+review_integrity(assetId,transcriptId,fingerprint,note), initialize_vault(),
+sync_vault(assetId,transcriptId), open_vault_note(assetId).
+IntegrityReport -> {transcriptId,version,status,durationMs?,coveredMs,segmentCount,
+chunkDone?,chunkTotal?,issues:[{code,startMs,endMs,message}],limitations,
+fingerprint,review:{note,reviewedAt}|null}.
+status is needsReview/noObviousIssues, never a claim of word accuracy.
+Reports use union coverage, independent source duration and originating job
+evidence. Standalone captions have unknown media duration. An edited version
+does not borrow another version's job completion evidence. Review submission
+rechecks its fingerprint; changed evidence requires a fresh review.
+
+ASR transcripts are committed only after all expected 300-second chunks are
+complete; one sub-millisecond remainder at a rounded chunk boundary is allowed.
+Worker errors and missing chunks retain checkpoints and do not publish partial
+transcripts as completed.
+
+SyncResult -> {snapshotPath,indexPath,personalPath,snapshotLink,openUri,created}.
+Vault sync writes only the configured local root's CourseWorkbench directory.
+Snapshots are content-addressed Markdown with stable Obsidian block IDs and
+version-bound notes/reviews. Identical sync is idempotent; modified snapshots
+produce a conflict. Personal notes are never replaced; indexes append links
+under a writer lock. Paths reject traversal and reparse points. Only internally
+constructed Obsidian open URIs are passed to the system protocol handler.
