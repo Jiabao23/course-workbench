@@ -1,0 +1,23 @@
+/* Motion is brief and never delays persistence, focus or input. */
+:root{--motion-fast:140ms;--motion-layout:220ms;--motion-ease:cubic-bezier(.2,.75,.25,1)}
+.sidebar{transition:width var(--motion-layout) var(--motion-ease),flex-basis var(--motion-layout) var(--motion-ease),padding var(--motion-layout) var(--motion-ease);overflow:hidden}
+.sidebar .brand,.sidebar nav button{white-space:nowrap}
+.organization-layout{transition:grid-template-columns var(--motion-layout) var(--motion-ease)}
+.collection-nav,.collection-rail{animation:surface-appear var(--motion-layout) var(--motion-ease)}
+.branch-popup,.inline-branch{animation:surface-appear var(--motion-fast) var(--motion-ease);transform-origin:top left}
+.collection-branch,.destination-branch{animation:branch-appear var(--motion-fast) var(--motion-ease)}
+.collection-branch [aria-expanded] svg,.branch-toggle svg{transition:transform var(--motion-fast) var(--motion-ease)}
+.organized-row{transition:background-color var(--motion-fast),box-shadow var(--motion-fast)}
+.organized-row:hover{background:var(--soft)}
+.organized-row:has(>input:checked){background:var(--soft);box-shadow:inset 2px 0 var(--accent)}
+.favorite-button svg{transition:transform var(--motion-fast) var(--motion-ease),fill var(--motion-fast)}
+.favorite-button:hover:not(:disabled) svg{transform:scale(1.12)}
+.favorite-button.is-favorite svg{animation:favorite-confirm 200ms var(--motion-ease)}
+.destination-tree button:hover:not(:disabled),.collection-select:hover{background:var(--soft)}
+.icon-button:hover:not(:disabled){background:var(--soft)}
+.theme-option{transition:outline-color var(--motion-fast),box-shadow var(--motion-fast),transform var(--motion-fast)}
+.theme-option:hover{box-shadow:0 3px 12px rgba(var(--shadow-rgb),.09);transform:translateY(-2px)}
+@keyframes surface-appear{from{opacity:.4;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+@keyframes branch-appear{from{opacity:.4;transform:translateX(-3px)}to{opacity:1;transform:translateX(0)}}
+@keyframes favorite-confirm{0%,100%{transform:scale(1)}50%{transform:scale(1.2)}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}.theme-option:hover,.favorite-button:hover:not(:disabled) svg,button:active{transform:none}}

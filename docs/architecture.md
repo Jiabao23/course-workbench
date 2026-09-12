@@ -56,3 +56,9 @@ flowchart LR
 `vault.rs` 在本地 vault 的 `CourseWorkbench` 目录生成内容摘要命名的不可覆盖 Markdown 快照；笔记只取所选文字版本，引用转换为稳定块链接。快照先完整落盘，再追加课程与全库索引，OS 文件锁串行化同步。重试可补齐中断的索引写入。个人笔记只创建一次，不进行双向同步。写入路径拒绝上级跳转、符号链接和 Windows reparse points。
 
 Obsidian 通过标准 URI 打开已注册的 vault 文件。没有安装或注册时，用户仍可使用本地 Markdown。工作台不安装插件，不复制媒体，不向 Obsidian 云服务传输数据。
+
+## 分类与主题（v0.4.0）
+
+SQLite schema 4 增加 `collections` 与 `asset_organization`。前者为有父级的稳定 ID 树，最多 8 层；后者记录每份课程的唯一分类与独立收藏。缺少记录代表未分类、未收藏。所有分类操作经过 Runtime mutation gate；批量移动在同一事务中校验目标和全部课程。非空分类不可删除，Asset、转写、笔记、FTS 与 Obsidian 文件路径均保持原有身份。
+
+Bootstrap 提供当前数据库的 organization 快照；LibraryView 计算含后代的范围，CollectionNavigation 管理分支菜单，OrganizeDialog 固定待收纳课程集合、显式确认移动。主题存入 AppSettings，CSS 语义色覆盖各页面；缓存只保存主题/布局标识。motion.css 集中管理短过渡并遵循 prefers-reduced-motion，动画不参与写入完成判定。

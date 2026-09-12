@@ -1,5 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import type { AppSettings,AssetDetail,IntegrityReport,VaultSyncResult,BenchmarkRecord,Bootstrap,CacheCategory,Job,Note,ResourceReport,SearchHit,Segment,SourcePart,SourcePreview,Transcript } from './types';
+import type { Collection,AppSettings,AssetDetail,IntegrityReport,VaultSyncResult,BenchmarkRecord,Bootstrap,CacheCategory,Job,Note,ResourceReport,SearchHit,Segment,SourcePart,SourcePreview,Transcript } from './types';
 
 export const isDesktop = () => isTauri();
 function call<T>(command:string,args?:Record<string,unknown>):Promise<T> {
@@ -7,6 +7,11 @@ function call<T>(command:string,args?:Record<string,unknown>):Promise<T> {
   return invoke<T>(command,args);
 }
 export const api = {
+  createCollection:(name:string,parentId:string|null)=>call<Collection>('create_collection',{name,parentId}),
+  renameCollection:(id:string,name:string)=>call<void>('rename_collection',{id,name}),
+  deleteCollection:(id:string)=>call<void>('delete_collection',{id}),
+  moveAssets:(assetIds:string[],collectionId:string|null)=>call<void>('move_assets',{assetIds,collectionId}),
+  setFavorite:(assetId:string,favorite:boolean)=>call<void>('set_favorite',{assetId,favorite}),
   checkIntegrity:(assetId:string,transcriptId:string)=>call<IntegrityReport>('check_integrity',{assetId,transcriptId}),
   reviewIntegrity:(assetId:string,transcriptId:string,fingerprint:string,note:string)=>call<IntegrityReport>('review_integrity',{assetId,transcriptId,fingerprint,note}),
   initializeVault:()=>call<string>('initialize_vault'),

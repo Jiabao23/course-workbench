@@ -145,3 +145,19 @@ version-bound notes/reviews. Identical sync is idempotent; modified snapshots
 produce a conflict. Personal notes are never replaced; indexes append links
 under a writer lock. Paths reject traversal and reparse points. Only internally
 constructed Obsidian open URIs are passed to the system protocol handler.
+
+## Organization and themes (desktop v0.4.0)
+
+SQLite schema 4 adds collections and asset_organization. Back up schema 3 before
+upgrading; downgrade requires restoring the matching pre-upgrade database.
+Bootstrap adds organization: {collections: Collection[], entries: AssetOrganization[]}.
+Collection -> {id,name,parentId}. AssetOrganization -> {assetId,collectionId,favorite}.
+A missing entry is unclassified and not favorite. Collection depth includes the
+root and is limited to 8; trimmed same-parent names compare by lowercase key.
+Commands: create_collection(name,parentId), rename_collection(id,name),
+delete_collection(id), move_assets(assetIds,collectionId), set_favorite(assetId,favorite).
+Move validates all assets and destination atomically. Only empty collections are
+deletable. Organization does not rename source/media/vault paths or versions.
+AppSettings adds theme: forest|paper|night (default forest for older JSON).
+Settings preview is temporary until save; discarding restores the saved theme.
+Layout caches are local UI preferences; authority for collections/favorites is SQLite.

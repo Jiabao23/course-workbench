@@ -1,0 +1,25 @@
+/* Shared semantic colors for every page, dialog and reader. */
+:root,[data-theme=forest]{
+  color-scheme:light;
+  --color-canvas:#f7f8f4;--color-surface:#ffffff;--color-soft:#eaf0e8;
+  --color-line:#d5ded1;--color-text:#27332d;--color-secondary:#475c49;
+  --color-muted:#626d60;--color-accent:#285e48;--color-accent-dark:#1d4937;
+  --color-warning:#875225;--color-warning-soft:#f5eddf;--color-on-accent:#ffffff;
+  --shadow-rgb:20,30,24;
+}
+[data-theme=paper]{
+  color-scheme:light;
+  --color-canvas:#f6f0e5;--color-surface:#fffaf2;--color-soft:#eee3d2;
+  --color-line:#daceba;--color-text:#3b3026;--color-secondary:#614d3b;
+  --color-muted:#73614c;--color-accent:#795334;--color-accent-dark:#604029;
+  --color-warning:#8c491d;--color-warning-soft:#f3e2cb;--color-on-accent:#ffffff;
+  --shadow-rgb:43,31,19;
+}
+[data-theme=night]{
+  color-scheme:dark;
+  --color-canvas:#151d28;--color-surface:#1d2937;--color-soft:#28394a;
+  --color-line:#3c4c5d;--color-text:#e3ebf2;--color-secondary:#c1d0dc;
+  --color-muted:#abbac8;--color-accent:#9bcfbe;--color-accent-dark:#b5ddcf;
+  --color-warning:#f0c18d;--color-warning-soft:#3b3028;--color-on-accent:#172d25;
+  --shadow-rgb:0,0,0;
+}

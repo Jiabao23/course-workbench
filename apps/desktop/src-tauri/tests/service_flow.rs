@@ -75,6 +75,47 @@ fn subtitle_path_completes_without_python_ffmpeg_audio_or_asr() {
 }
 
 #[test]
+fn organization_is_scoped_to_library_and_theme_survives_settings_reload() {
+    let (temp, app, source) = runtime();
+    let asset = imported(&app, &source);
+    let group = app.create_collection("个人学习", None).unwrap();
+    app.move_assets(std::slice::from_ref(&asset.id), Some(&group.id))
+        .unwrap();
+    app.set_favorite(&asset.id, true).unwrap();
+    let mut original = app.settings();
+    original.theme = "night".into();
+    app.save_settings(original.clone()).unwrap();
+    assert_eq!(
+        settings::load(&temp.path().join("settings.json"))
+            .unwrap()
+            .theme,
+        "night"
+    );
+    let mut another = original.clone();
+    another.data_dir = temp
+        .path()
+        .join("another-library")
+        .to_string_lossy()
+        .into_owned();
+    app.save_settings(another).unwrap();
+    assert!(app.bootstrap().unwrap().organization.collections.is_empty());
+    assert!(app.set_favorite(&asset.id, false).is_err());
+    app.save_settings(original).unwrap();
+    let restored = app.bootstrap().unwrap();
+    assert_eq!(restored.organization.collections[0].id, group.id);
+    assert!(restored.organization.entries[0].favorite);
+    assert_eq!(
+        app.asset_detail(&asset.id)
+            .unwrap()
+            .transcript
+            .unwrap()
+            .segments
+            .len(),
+        2
+    );
+}
+
+#[test]
 fn integrity_review_and_vault_sync_survive_reopen_without_crossing_versions() {
     let (temp, app, source) = runtime();
     let asset = imported(&app, &source);

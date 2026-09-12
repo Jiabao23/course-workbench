@@ -12,6 +12,54 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
+#[tauri::command]
+pub async fn create_collection(
+    state: State<'_, Arc<Runtime>>,
+    name: String,
+    parent_id: Option<String>,
+) -> Reply<course_core::organization::Collection> {
+    blocking(state.inner().clone(), move |s| {
+        s.create_collection(&name, parent_id.as_deref())
+    })
+    .await
+}
+#[tauri::command]
+pub async fn rename_collection(
+    state: State<'_, Arc<Runtime>>,
+    id: String,
+    name: String,
+) -> Reply<()> {
+    blocking(state.inner().clone(), move |s| {
+        s.rename_collection(&id, &name)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn delete_collection(state: State<'_, Arc<Runtime>>, id: String) -> Reply<()> {
+    blocking(state.inner().clone(), move |s| s.delete_collection(&id)).await
+}
+#[tauri::command]
+pub async fn move_assets(
+    state: State<'_, Arc<Runtime>>,
+    asset_ids: Vec<String>,
+    collection_id: Option<String>,
+) -> Reply<()> {
+    blocking(state.inner().clone(), move |s| {
+        s.move_assets(&asset_ids, collection_id.as_deref())
+    })
+    .await
+}
+#[tauri::command]
+pub async fn set_favorite(
+    state: State<'_, Arc<Runtime>>,
+    asset_id: String,
+    favorite: bool,
+) -> Reply<()> {
+    blocking(state.inner().clone(), move |s| {
+        s.set_favorite(&asset_id, favorite)
+    })
+    .await
+}
 type Reply<T> = Result<T, String>;
 #[tauri::command]
 pub async fn check_integrity(

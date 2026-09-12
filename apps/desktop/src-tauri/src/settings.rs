@@ -28,6 +28,7 @@ pub struct AppSettings {
     pub cookie_file: String,
     pub setup_complete: bool,
     pub obsidian_vault: String,
+    pub theme: String,
 }
 
 pub fn find_program(names: &[&str]) -> String {
@@ -102,6 +103,7 @@ impl Default for AppSettings {
             cookie_file: String::new(),
             setup_complete: false,
             obsidian_vault: String::new(),
+            theme: "forest".into(),
         }
     }
 }
@@ -114,6 +116,10 @@ impl AppSettings {
         self.data_path().join("cache").join(category)
     }
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            ["forest", "paper", "night"].contains(&self.theme.as_str()),
+            "未知主题，请选择森林浅色、暖纸米色或深海夜色"
+        );
         ensure!(
             self.obsidian_vault.is_empty()
                 || (Path::new(&self.obsidian_vault).is_absolute()

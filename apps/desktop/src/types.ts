@@ -8,8 +8,8 @@ export interface SearchHit { assetId:string; assetTitle:string; transcriptId:str
 export interface GpuInfo { name:string; totalMb:number; freeMb:number; driver:string }
 export interface SystemResources { cpuName:string; logicalCores:number; ramTotalMb:number; ramAvailableMb:number; diskFreeMb:number; gpu:GpuInfo|null; cudaAvailable:boolean; pythonAvailable:boolean; torchVersion:string|null; warnings:string[] }
 export interface ResourceRecommendation { model:string; device:string; threads:number; gpuConcurrency:number; maxGpuConcurrency:number; reason:string; warnings:string[] }
-export interface AppSettings { dataDir:string; modelDir:string; pythonPath:string; ffmpegPath:string; ffprobePath:string; ytDlpPath:string; preset:'eco'|'balanced'|'quality'|'custom'; model:string; device:'auto'|'cpu'|'cuda'; threads:number; gpuConcurrency:number; language:string; prompt:string; llmBaseUrl:string; llmModel:string; llmContextChars:number; cookieFile:string; setupComplete:boolean; obsidianVault:string }
-export interface Bootstrap { assets:Asset[]; jobs:Job[]; settings:AppSettings; resources:SystemResources; recommendation:ResourceRecommendation; apiKeyConfigured:boolean }
+export interface AppSettings { dataDir:string; modelDir:string; pythonPath:string; ffmpegPath:string; ffprobePath:string; ytDlpPath:string; preset:'eco'|'balanced'|'quality'|'custom'; model:string; device:'auto'|'cpu'|'cuda'; threads:number; gpuConcurrency:number; language:string; prompt:string; llmBaseUrl:string; llmModel:string; llmContextChars:number; cookieFile:string; setupComplete:boolean; obsidianVault:string; theme:Theme }
+export interface Bootstrap { organization:Organization; assets:Asset[]; jobs:Job[]; settings:AppSettings; resources:SystemResources; recommendation:ResourceRecommendation; apiKeyConfigured:boolean }
 export interface AssetDetail { asset:Asset; transcript:Transcript|null; versions:Transcript[]; notes:Note[] }
 export type SubtitleStatus='available'|'absent'|'loginRequired'|'failed'|'unchecked';
 export interface SubtitleTrack { language:string; label:string; url:string; format:string; automatic:boolean }
@@ -22,3 +22,8 @@ export interface CacheCategory { id:string; title:string; path:string; sizeBytes
 export interface IntegrityIssue { code:string; startMs:number; endMs:number; message:string }
 export interface IntegrityReport { transcriptId:string; version:number; status:string; durationMs:number|null; coveredMs:number; segmentCount:number; chunkDone:number|null; chunkTotal:number|null; issues:IntegrityIssue[]; limitations:string; fingerprint:string; review:{note:string;reviewedAt:string}|null }
 export interface VaultSyncResult { snapshotPath:string; indexPath:string; personalPath:string; snapshotLink:string; openUri:string; created:boolean }
+
+export type Theme='forest'|'paper'|'night';
+export interface Collection {id:string;name:string;parentId:string|null}
+export interface AssetOrganization {assetId:string;collectionId:string|null;favorite:boolean}
+export interface Organization {collections:Collection[];entries:AssetOrganization[]}

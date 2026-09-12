@@ -103,7 +103,19 @@ CREATE TABLE IF NOT EXISTS integrity_reviews (
     reviewed_at TEXT NOT NULL,
     PRIMARY KEY(transcript_id, fingerprint)
 );
-PRAGMA user_version = 3;
+CREATE TABLE IF NOT EXISTS collections (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    name_key TEXT NOT NULL,
+    parent_id TEXT REFERENCES collections(id) ON DELETE RESTRICT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS collection_sibling_names ON collections(IFNULL(parent_id,''),name_key);
+CREATE TABLE IF NOT EXISTS asset_organization (
+    asset_id TEXT PRIMARY KEY NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    collection_id TEXT REFERENCES collections(id) ON DELETE RESTRICT,
+    favorite INTEGER NOT NULL DEFAULT 0 CHECK(favorite IN (0,1))
+);
+PRAGMA user_version = 4;
 "#;
 
 const ASSET_COLUMNS: &str = "id, title, source_kind, source, bvid, page, duration_ms, audio_path, active_version_id, created_at, updated_at";
@@ -131,7 +143,7 @@ impl Db {
         let db = Self { path };
         let mut connection = db.connection()?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        ensure!(version <= 3, "数据库版本较新，请升级应用后打开");
+        ensure!(version <= 4, "数据库版本较新，请升级应用后打开");
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction
             .execute_batch(SCHEMA)
@@ -180,7 +192,7 @@ impl Db {
         Ok(())
     }
 
-    fn connection(&self) -> Result<Connection> {
+    pub(crate) fn connection(&self) -> Result<Connection> {
         let connection = Connection::open(&self.path).context("无法打开数据库")?;
         connection.busy_timeout(Duration::from_secs(10))?;
         connection.pragma_update(None, "foreign_keys", "ON")?;

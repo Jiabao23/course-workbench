@@ -51,6 +51,7 @@ fn lock_library(settings: &AppSettings) -> Result<fs::File> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bootstrap {
+    pub organization: course_core::organization::Organization,
     pub assets: Vec<Asset>,
     pub jobs: Vec<Job>,
     pub settings: AppSettings,
@@ -187,6 +188,7 @@ impl Runtime {
         };
         let _gate = self.mutation_gate.lock().unwrap();
         Ok(Bootstrap {
+            organization: self.db().organization()?,
             assets: self.db().list_assets()?,
             jobs: self.db().list_jobs()?,
             settings: self.settings(),
@@ -923,6 +925,30 @@ impl Runtime {
             versions: db.list_transcripts(id)?,
             notes: db.list_notes(id)?,
         })
+    }
+    pub fn create_collection(
+        &self,
+        name: &str,
+        parent_id: Option<&str>,
+    ) -> Result<course_core::organization::Collection> {
+        let _gate = self.mutation_gate.lock().unwrap();
+        self.db().create_collection(name, parent_id)
+    }
+    pub fn rename_collection(&self, id: &str, name: &str) -> Result<()> {
+        let _gate = self.mutation_gate.lock().unwrap();
+        self.db().rename_collection(id, name)
+    }
+    pub fn delete_collection(&self, id: &str) -> Result<()> {
+        let _gate = self.mutation_gate.lock().unwrap();
+        self.db().delete_collection(id)
+    }
+    pub fn move_assets(&self, asset_ids: &[String], collection_id: Option<&str>) -> Result<()> {
+        let _gate = self.mutation_gate.lock().unwrap();
+        self.db().move_assets(asset_ids, collection_id)
+    }
+    pub fn set_favorite(&self, asset_id: &str, favorite: bool) -> Result<()> {
+        let _gate = self.mutation_gate.lock().unwrap();
+        self.db().set_favorite(asset_id, favorite)
     }
     pub fn check_integrity(
         &self,
