@@ -10,8 +10,10 @@
 - [x] Add theme setting validation and persistence tests; implement three palettes, preview/save/discard and startup cache. Check production TypeScript build.
 - [x] Exercise real Tauri UI in an isolated library and record screenshots, classification/restart/empty deletion/old content behavior and all themes.
 - [x] Run full workspace tests, Python tests, frontend tests, fmt, Clippy and NSIS build. Back up old library and validate installed upgrade when no user window has unsaved edits.
-- [ ] Document exact evidence/limits, independently review, commit and push existing feature branch; verify remote SHA and CI status.
+- [x] Document exact evidence/limits, independently review, commit and push existing feature branch; verify remote SHA and CI status.
 
 - [x] Add “收纳到…” popup with inline branches, independent main/classification collapse and keyboard focus.
 - [x] Add short layout/menu/favorite feedback and reduced-motion support; independent incremental review found no outstanding issue.
 - [x] Verify final motion and minimum window layout in packaged WebView2.
+
+Feature commit `6276f85` pushed and remote SHA verified. GitHub Windows checks #5 was in progress at delivery; local checks and installed validation passed.

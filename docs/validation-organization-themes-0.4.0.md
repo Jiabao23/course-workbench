@@ -59,3 +59,5 @@ SHA256：`31d2c81945f4a34e0bc893339a81de08628f159432a69cfba917ccd374c50cac`。
 分类是同一资料库内的逻辑管理，不移动音视频、文字版本或 Obsidian 快照；暂不支持文件夹重排/跨父级移动。收藏与归属存 SQLite，布局偏好存当前 WebView 配置；临时搜索/筛选不跨重启。Obsidian 仍为主动单向本地快照。
 
 本轮未重测云端模型质量、CER、其他显卡和第二台干净 Windows。此前原生文件选择/跨窗口拖入的自动化限制仍然存在。
+
+代码提交 `6276f85` 已推送 `feat/course-workbench-v1` 并核对远端 SHA；GitHub 仓库现转到 `Jiabao23/course-workbench`。交付时 Windows checks #5 显示 In progress，不能记为已通过。
