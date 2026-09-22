@@ -1,6 +1,40 @@
 use course_core::{Asset, Segment, Transcript};
 use course_workbench_lib::integrity::{check, require_complete_chunks};
 
+#[test]
+fn speech_evidence_finds_uncovered_voice_without_flagging_silent_tail() {
+    let (a, t) = sample();
+    let mut r = check(&a, &t, None, None);
+    let speech = serde_json::json!({"speech":[{"start_ms":0,"end_ms":9000},{"start_ms":18000,"end_ms":25000},{"start_ms":30000,"end_ms":34000}]});
+    course_workbench_lib::integrity::add_quality_evidence(&mut r, &t, Some(&speech), None).unwrap();
+    assert!(r
+        .issues
+        .iter()
+        .any(|i| i.code == "uncoveredSpeech" && i.start_ms == 18000 && i.end_ms == 25000));
+    assert!(r
+        .issues
+        .iter()
+        .any(|i| i.code == "tail" && i.severity == "info"));
+    assert_eq!(r.audio_check.status, "available");
+    assert!(r.issues.iter().all(|i| !i.id.is_empty()));
+}
+
+#[test]
+fn diagnostics_are_suspicions_and_invalid_speech_is_rejected() {
+    let (a, t) = sample();
+    let mut r = check(&a, &t, None, None);
+    let diagnostics = serde_json::json!([{"id":"a","diagnostics":{"avg_logprob":-1.4,"compression_ratio":3.1,"no_speech_prob":0.9}}]);
+    course_workbench_lib::integrity::add_quality_evidence(&mut r, &t, None, Some(&diagnostics))
+        .unwrap();
+    assert!(r.issues.iter().any(|i| i.code == "recognitionDoubt"));
+    assert_eq!(r.pending_count, r.issues.len());
+    let bad = serde_json::json!({"speech":[{"start_ms":25000,"end_ms":10000}]});
+    assert!(
+        course_workbench_lib::integrity::add_quality_evidence(&mut r, &t, Some(&bad), None)
+            .is_err()
+    );
+}
+
 fn sample() -> (Asset, Transcript) {
     let asset: Asset = serde_json::from_value(serde_json::json!({"id":"asset-1","title":"课程","sourceKind":"localMedia","source":"D:/lesson.wav","bvid":null,"page":null,"durationMs":60000,"audioPath":null,"activeVersionId":"version-1","createdAt":"now","updatedAt":"now"})).unwrap();
     let transcript = Transcript {

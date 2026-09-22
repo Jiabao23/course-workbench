@@ -29,6 +29,7 @@ pub struct AppSettings {
     pub setup_complete: bool,
     pub obsidian_vault: String,
     pub theme: String,
+    pub quality_packages_dir: String,
 }
 
 pub fn find_program(names: &[&str]) -> String {
@@ -104,6 +105,7 @@ impl Default for AppSettings {
             setup_complete: false,
             obsidian_vault: String::new(),
             theme: "forest".into(),
+            quality_packages_dir: String::new(),
         }
     }
 }

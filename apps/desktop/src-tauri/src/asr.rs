@@ -42,6 +42,13 @@ impl AsrEngine for WhisperWorker {
         );
         let mut command = process::command(&settings.python_path)?;
         command.arg(&self.path);
+        if matches!(
+            request["command"].as_str(),
+            Some("detect_speech" | "detector_identity")
+        ) && !settings.quality_packages_dir.is_empty()
+        {
+            command.env("PYTHONPATH", &settings.quality_packages_dir);
+        }
         let input = format!("{}\n", serde_json::to_string(&request)?);
         let log = settings
             .data_path()
@@ -49,6 +56,10 @@ impl AsrEngine for WhisperWorker {
             .join(format!("worker-{job_id}.log"));
         let timeout = if request["command"] == "probe" {
             Duration::from_secs(90)
+        } else if request["command"] == "detector_identity" {
+            Duration::from_secs(15)
+        } else if request["command"] == "detect_speech" {
+            Duration::from_secs(2 * 3600)
         } else {
             Duration::from_secs(48 * 3600)
         };

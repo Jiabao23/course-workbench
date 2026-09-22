@@ -58,8 +58,17 @@ pub fn basic_resources(settings: &AppSettings) -> SystemResources {
 
 impl ResourceProfiler for LocalProfiler {
     fn profile(&self, settings: &AppSettings) -> Result<ResourceReport> {
+        self.profile_with_control(settings, &ProcessControl::default())
+    }
+}
+impl LocalProfiler {
+    pub fn profile_with_control(
+        &self,
+        settings: &AppSettings,
+        control: &ProcessControl,
+    ) -> Result<ResourceReport> {
+        control.check()?;
         let mut resources = basic_resources(settings);
-        let control = ProcessControl::default();
         let smi = find_program(&["nvidia-smi.exe", "nvidia-smi"]);
         if !smi.is_empty() {
             let mut command = process::command(&smi)?;
@@ -70,7 +79,7 @@ impl ResourceProfiler for LocalProfiler {
             ]);
             if let Ok(output) = process::capture(
                 command,
-                &control,
+                control,
                 &settings.data_path().join("logs/gpu-probe.log"),
                 Duration::from_secs(12),
             ) {
@@ -88,6 +97,7 @@ impl ResourceProfiler for LocalProfiler {
             }
         }
         let mut models = vec![];
+        control.check()?;
         let mut dependencies = json!({});
         let mut engine_version = None;
         if !settings.python_path.is_empty() {
@@ -97,7 +107,7 @@ impl ResourceProfiler for LocalProfiler {
             match worker.execute(
                 settings,
                 json!({"command":"probe","job_id":"resource-probe"}),
-                &control,
+                control,
                 &mut |_| Ok(()),
             ) {
                 Ok(probe) => {
@@ -135,6 +145,7 @@ impl ResourceProfiler for LocalProfiler {
                 Err(error) => resources.warnings.push(format!("识别环境不可用：{error}")),
             }
         }
+        control.check()?;
         if !resources.python_available {
             resources.warnings.push(
                 "未找到可用 Whisper 环境。字幕导入、校对和搜索仍可使用；请在设置中配置识别环境。"
@@ -164,5 +175,22 @@ impl ResourceProfiler for LocalProfiler {
             dependencies,
             engine_version,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn cancelled_profile_is_not_reported_as_missing_dependencies() {
+        let control = ProcessControl::default();
+        control.cancel();
+        let profiler = LocalProfiler {
+            worker_path: "not-a-worker.py".into(),
+        };
+        let error = profiler
+            .profile_with_control(&AppSettings::default(), &control)
+            .unwrap_err();
+        assert!(error.to_string().contains("任务已取消"));
     }
 }

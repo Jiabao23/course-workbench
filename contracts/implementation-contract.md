@@ -161,3 +161,39 @@ deletable. Organization does not rename source/media/vault paths or versions.
 AppSettings adds theme: forest|paper|night (default forest for older JSON).
 Settings preview is temporary until save; discarding restores the saved theme.
 Layout caches are local UI preferences; authority for collections/favorites is SQLite.
+
+## Per-issue quality review (desktop v0.5.0)
+
+SQLite schema 5 adds issue_reviews, quality_evidence, quality_evidence_history
+and recheck_candidates. Back up schema 4 before upgrade. Reviews are keyed by
+transcript, evidence fingerprint and issue ID; statuses are pending, confirmed
+and revised. A revised record links to a new version and is not an accuracy claim.
+Historical report-level notes remain visible but do not clear pending issues.
+
+IntegrityReport adds pendingCount, diagnosticsAvailable, historicalReview and
+audioCheck {status:notRun|available|unavailable,message}. Issues add stable id,
+severity:warning|info and resolution:{status,note,reviewedAt}|null.
+Audio checks bind full audio SHA256 and detector/model/runtime/options identity.
+Replacing speech evidence archives the previous payload; diagnostic and
+provenance evidence is immutable. Silence lowers a time-gap warning to info,
+not deletion. Missing diagnostic values remain explicitly unavailable.
+
+Commands: review_integrity_issue(assetId,transcriptId,fingerprint,issueId,status,note),
+detect_speech(assetId,transcriptId), cancel_quality(),
+recheck_interval(assetId,transcriptId,startMs,endMs),
+list_recheck_candidates(assetId,transcriptId), adopt_candidate(candidateId),
+discard_candidate(candidateId). Public review commands accept pending/confirmed;
+revised is generated only by an explicit version-producing edit/adoption.
+
+Candidates are persisted, limited to 120 seconds including whole segment
+boundaries, and tied to the active source version and audio hash. Adoption is
+transactional: new version, FTS, provenance, active pointer and related review
+records; old notes and citations remain tied to their original version.
+VAD runs on CPU; rechecks share the existing exclusive resource gate. Neither
+command downloads audio or replaces text automatically.
+
+AppSettings adds qualityPackagesDir (default empty). Only the separate VAD
+worker receives that directory via PYTHONPATH. JSONL v1 transcribe segments may
+include diagnostics {avg_logprob,no_speech_prob,compression_ratio}; older
+checkpoints without diagnostics remain valid. quality_worker.py supports
+detect_speech and lightweight detector_identity commands.

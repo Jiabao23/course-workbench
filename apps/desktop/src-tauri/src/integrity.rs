@@ -7,9 +7,25 @@ use sha2::{Digest, Sha256};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Issue {
+    pub id: String,
+    pub severity: String,
+    pub resolution: Option<Resolution>,
     pub code: String,
     pub start_ms: u64,
     pub end_ms: u64,
+    pub message: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Resolution {
+    pub status: String,
+    pub note: String,
+    pub reviewed_at: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioCheck {
+    pub status: String,
     pub message: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -21,6 +37,9 @@ pub struct Review {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IntegrityReport {
+    pub audio_check: AudioCheck,
+    pub pending_count: usize,
+    pub diagnostics_available: bool,
     pub transcript_id: String,
     pub version: u32,
     pub status: String,
@@ -33,6 +52,7 @@ pub struct IntegrityReport {
     pub limitations: String,
     pub fingerprint: String,
     pub review: Option<Review>,
+    pub historical_review: Option<Review>,
 }
 
 pub fn require_complete_chunks(done: u32, total: u32, duration_ms: u64) -> Result<()> {
@@ -60,6 +80,9 @@ pub fn check(
     let mut issues = Vec::new();
     let mut add = |code: &str, start_ms: u64, end_ms: u64, message: &str| {
         issues.push(Issue {
+            id: format!("{code}:{start_ms}:{end_ms}"),
+            severity: "warning".into(),
+            resolution: None,
             code: code.into(),
             start_ms,
             end_ms,
@@ -190,7 +213,7 @@ pub fn check(
     } else {
         "needsReview"
     };
-    let mut report=IntegrityReport {transcript_id:transcript.id.clone(),version:transcript.version,status:status.into(),duration_ms:duration,covered_ms:covered,segment_count:transcript.segments.len(),chunk_done:job.map(|j|j.chunk_done),chunk_total:job.map(|j|j.chunk_total),issues,limitations:"规则核对不能证明逐字无遗漏，也不是识别准确率。静音、配乐与字幕间隔可能造成空白；请回听疑点并记录人工结论。".into(),fingerprint:String::new(),review:None};
+    let mut report=IntegrityReport {audio_check:AudioCheck{status:"notRun".into(),message:"尚未进行音频语音检测；当前仅检查时间轴与任务证据".into()},pending_count:issues.len(),diagnostics_available:false,transcript_id:transcript.id.clone(),version:transcript.version,status:status.into(),duration_ms:duration,covered_ms:covered,segment_count:transcript.segments.len(),chunk_done:job.map(|j|j.chunk_done),chunk_total:job.map(|j|j.chunk_total),issues,limitations:"规则核对不能证明逐字无遗漏，也不是识别准确率。静音、配乐与字幕间隔可能造成空白；请回听疑点并记录人工结论。".into(),fingerprint:String::new(),review:None,historical_review:None};
     // Includes text and independent evidence; acquiring audio invalidates old reviews.
     let bytes = serde_json::to_vec(&(
         &report,
@@ -201,4 +224,161 @@ pub fn check(
     .expect("serializable report");
     report.fingerprint = hex::encode(Sha256::digest(bytes));
     report
+}
+
+/// Enrich timeline evidence; speech intervals never establish word accuracy.
+pub fn add_quality_evidence(
+    report: &mut IntegrityReport,
+    transcript: &Transcript,
+    speech: Option<&serde_json::Value>,
+    diagnostics: Option<&serde_json::Value>,
+) -> Result<()> {
+    if let Some(evidence) = speech {
+        let values = evidence["speech"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("语音检测结果缺少区间"))?;
+        let mut intervals = Vec::new();
+        let mut previous = 0;
+        for value in values {
+            let start = value["start_ms"]
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("语音起点无效"))?;
+            let end = value["end_ms"]
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("语音终点无效"))?;
+            ensure!(
+                end > start
+                    && start >= previous
+                    && report
+                        .duration_ms
+                        .is_none_or(|d| end <= d.saturating_add(1000)),
+                "语音检测区间无效"
+            );
+            previous = end;
+            intervals.push((start, end));
+        }
+        // Retain structural faults; time gaps alone are lower-priority when independent audio is available.
+        for issue in &mut report.issues {
+            if ["head", "gap", "tail"].contains(&issue.code.as_str())
+                && !intervals
+                    .iter()
+                    .any(|&(a, b)| a < issue.end_ms && b > issue.start_ms)
+            {
+                issue.severity = "info".into();
+                issue
+                    .message
+                    .push_str(" 语音检测未发现讲话，可能为静音；保留时间轴空白供复核。");
+            }
+        }
+        let mut text: Vec<_> = transcript.segments.iter().collect();
+        text.sort_by_key(|s| s.start_ms);
+        for (start, end) in intervals {
+            let mut cursor = start;
+            for s in &text {
+                if s.end_ms <= cursor {
+                    continue;
+                }
+                if s.start_ms >= end {
+                    break;
+                }
+                let missing_end = s.start_ms.min(end);
+                if missing_end.saturating_sub(cursor) >= 1500 {
+                    push_issue(
+                        report,
+                        "uncoveredSpeech",
+                        cursor,
+                        missing_end,
+                        "检测到讲话但缺少对应文字，可能漏转；请回听确认。",
+                    );
+                }
+                cursor = cursor.max(s.end_ms).min(end);
+            }
+            if end.saturating_sub(cursor) >= 1500 {
+                push_issue(
+                    report,
+                    "uncoveredSpeech",
+                    cursor,
+                    end,
+                    "检测到讲话但缺少对应文字，可能漏转；请回听确认。",
+                );
+            }
+        }
+        report.audio_check = AudioCheck {
+            status: "available".into(),
+            message: "已对照本地音频语音活动；短漏字和识别错误仍需回听".into(),
+        };
+    }
+    if let Some(values) = diagnostics.and_then(|d| d.as_array()) {
+        report.diagnostics_available = !transcript.segments.is_empty()
+            && transcript.segments.iter().all(|segment| {
+                values.iter().any(|v| {
+                    v["id"].as_str() == Some(segment.id.as_str())
+                        && ["avg_logprob", "no_speech_prob", "compression_ratio"]
+                            .iter()
+                            .all(|key| v["diagnostics"][key].as_f64().is_some_and(f64::is_finite))
+                })
+            });
+        for value in values {
+            let Some(segment) = transcript
+                .segments
+                .iter()
+                .find(|s| Some(s.id.as_str()) == value["id"].as_str())
+            else {
+                continue;
+            };
+            let d = &value["diagnostics"];
+            if d["avg_logprob"]
+                .as_f64()
+                .is_some_and(|x| x.is_finite() && x < -1.0)
+                || d["compression_ratio"]
+                    .as_f64()
+                    .is_some_and(|x| x.is_finite() && x > 2.4)
+                || d["no_speech_prob"]
+                    .as_f64()
+                    .is_some_and(|x| x.is_finite() && x > 0.6)
+            {
+                push_issue(
+                    report,
+                    "recognitionDoubt",
+                    segment.start_ms,
+                    segment.end_ms,
+                    "识别诊断提示低可信或异常重复；这是复核线索，不是错误判决。",
+                );
+            }
+        }
+    }
+    report.pending_count = report
+        .issues
+        .iter()
+        .filter(|i| i.severity == "warning")
+        .count();
+    report.status = if report.issues.is_empty() {
+        "noObviousIssues"
+    } else {
+        "needsReview"
+    }
+    .into();
+    if speech.is_some() || diagnostics.is_some() {
+        report.fingerprint = hex::encode(Sha256::digest(serde_json::to_vec(&(
+            &report.fingerprint,
+            "quality-v1",
+            speech,
+            diagnostics,
+        ))?));
+    }
+    Ok(())
+}
+fn push_issue(report: &mut IntegrityReport, code: &str, start_ms: u64, end_ms: u64, message: &str) {
+    let id = format!("{code}:{start_ms}:{end_ms}");
+    if !report.issues.iter().any(|i| i.id == id) {
+        report.issues.push(Issue {
+            id,
+            severity: "warning".into(),
+            code: code.into(),
+            start_ms,
+            end_ms,
+            message: message.into(),
+            resolution: None,
+        });
+    }
 }

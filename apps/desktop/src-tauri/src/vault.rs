@@ -200,6 +200,15 @@ pub fn sync(
     let course = managed.join(&asset.id);
     directory(&course)?;
     let mut body=format!("---\ncourse_workbench: true\nasset_id: {}\ntranscript_id: {}\nversion: {}\ntags: [course-workbench]\n---\n\n# {}\n\n来源：{}\n\n[[CourseWorkbench/{}/个人笔记|我的补充]] · [[CourseWorkbench/{}/课程索引|历史快照]]\n\n## 完整性核对\n\n{}\n\n时间轴覆盖 {} ms / {}；{} 段。覆盖比例不是准确率。\n",asset.id,t.id,t.version,plain(&asset.title),plain(&asset.source),asset.id,asset.id,report.limitations,report.covered_ms,report.duration_ms.map_or("来源时长未知".into(),|d|format!("{d} ms")),report.segment_count);
+    body.push_str(&format!(
+        "\n语音证据：{}；识别诊断：{}。\n",
+        plain(&report.audio_check.message),
+        if report.diagnostics_available {
+            "可用"
+        } else {
+            "缺失或不完整"
+        }
+    ));
     if report.issues.is_empty() {
         body.push_str("\n未发现明显时间轴异常。\n");
     }
@@ -207,6 +216,25 @@ pub fn sync(
         body.push_str(&format!(
             "\n- {}–{} ms：{}\n",
             i.start_ms, i.end_ms, i.message
+        ));
+        if let Some(resolution) = &i.resolution {
+            body.push_str(&format!(
+                "  - {}（{}）：{}\n",
+                match resolution.status.as_str() {
+                    "confirmed" => "已确认正常",
+                    "revised" => "已修订，请核对新版本",
+                    _ => "待核对",
+                },
+                plain(&resolution.reviewed_at),
+                plain(&resolution.note)
+            ));
+        }
+    }
+    if let Some(review) = &report.historical_review {
+        body.push_str(&format!(
+            "\n历史整体记录（旧依据，仅供参考，{}）：{}\n",
+            plain(&review.reviewed_at),
+            plain(&review.note)
         ));
     }
     if let Some(review) = &report.review {

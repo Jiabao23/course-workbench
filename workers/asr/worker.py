@@ -64,8 +64,15 @@ def normalize_segments(segments, offset_ms, duration_ms, prefix):
         end_ms = max(start_ms, min(duration_ms, offset_ms + round(end * 1000)))
         if end_ms <= start_ms:
             continue
-        result.append({"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"cw:{prefix}:{index}")),
-                       "start_ms": start_ms, "end_ms": end_ms, "text": text})
+        segment = {"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"cw:{prefix}:{index}")),
+                   "start_ms": start_ms, "end_ms": end_ms, "text": text}
+        diagnostics = {key: item[key] for key in
+                       ("avg_logprob", "no_speech_prob", "compression_ratio")
+                       if isinstance(item.get(key), (int, float))
+                       and not isinstance(item[key], bool) and math.isfinite(item[key])}
+        if diagnostics:
+            segment["diagnostics"] = diagnostics
+        result.append(segment)
     return sorted(result, key=lambda item: item["start_ms"])
 
 
@@ -135,6 +142,12 @@ def read_checkpoint(path, key, index, start_ms, end_ms):
             return None
         previous, identifiers = start_ms, set()
         for segment in item["segments"]:
+            if "diagnostics" in segment:
+                diagnostics = segment["diagnostics"]
+                if (not isinstance(diagnostics, dict)
+                        or any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                               or not math.isfinite(value) for value in diagnostics.values())):
+                    return None
             if (not isinstance(segment.get("text"), str) or not segment["text"].strip()
                     or not isinstance(segment.get("id"), str) or segment["id"] in identifiers
                     or not isinstance(segment.get("start_ms"), int)

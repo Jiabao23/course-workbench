@@ -115,7 +115,38 @@ CREATE TABLE IF NOT EXISTS asset_organization (
     collection_id TEXT REFERENCES collections(id) ON DELETE RESTRICT,
     favorite INTEGER NOT NULL DEFAULT 0 CHECK(favorite IN (0,1))
 );
-PRAGMA user_version = 4;
+CREATE TABLE IF NOT EXISTS issue_reviews (
+    transcript_id TEXT NOT NULL REFERENCES transcripts(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    issue_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','confirmed','revised')),
+    note TEXT NOT NULL,
+    reviewed_at TEXT NOT NULL,
+    PRIMARY KEY(transcript_id,fingerprint,issue_id)
+);
+CREATE TABLE IF NOT EXISTS quality_evidence (
+    transcript_id TEXT NOT NULL REFERENCES transcripts(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('diagnostics','speech','provenance')),
+    payload TEXT NOT NULL,
+    PRIMARY KEY(transcript_id,kind)
+);
+CREATE TABLE IF NOT EXISTS quality_evidence_history (
+    transcript_id TEXT NOT NULL REFERENCES transcripts(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('diagnostics','speech','provenance')),
+    payload TEXT NOT NULL,
+    archived_at TEXT NOT NULL,
+    PRIMARY KEY(transcript_id,kind,payload)
+);
+CREATE TABLE IF NOT EXISTS recheck_candidates (
+    id TEXT PRIMARY KEY NOT NULL,
+    asset_id TEXT NOT NULL,
+    transcript_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    adopted_transcript_id TEXT REFERENCES transcripts(id),
+    FOREIGN KEY(asset_id,transcript_id) REFERENCES transcripts(asset_id,id)
+);
+CREATE INDEX IF NOT EXISTS candidates_by_base ON recheck_candidates(asset_id,transcript_id);
+PRAGMA user_version = 5;
 "#;
 
 const ASSET_COLUMNS: &str = "id, title, source_kind, source, bvid, page, duration_ms, audio_path, active_version_id, created_at, updated_at";
@@ -143,7 +174,7 @@ impl Db {
         let db = Self { path };
         let mut connection = db.connection()?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        ensure!(version <= 4, "数据库版本较新，请升级应用后打开");
+        ensure!(version <= 5, "数据库版本较新，请升级应用后打开");
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction
             .execute_batch(SCHEMA)
@@ -173,6 +204,10 @@ impl Db {
         fingerprint: &str,
     ) -> Result<Option<(String, String)>> {
         Ok(self.connection()?.query_row("SELECT note,reviewed_at FROM integrity_reviews WHERE transcript_id=?1 AND fingerprint=?2",params![transcript_id,fingerprint],|r|Ok((r.get(0)?,r.get(1)?))).optional()?)
+    }
+    /// Historical summary only; this does not resolve individual current issues.
+    pub fn latest_integrity_review(&self, transcript_id: &str) -> Result<Option<(String, String)>> {
+        Ok(self.connection()?.query_row("SELECT note,reviewed_at FROM integrity_reviews WHERE transcript_id=?1 ORDER BY reviewed_at DESC, fingerprint DESC LIMIT 1",[transcript_id],|r|Ok((r.get(0)?,r.get(1)?))).optional()?)
     }
     pub fn save_integrity_review(
         &self,
@@ -316,54 +351,15 @@ impl Db {
             let running: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM jobs WHERE id=?1 AND asset_id=?2 AND status='running')", params![job_id,asset_id], |row| row.get(0))?;
             ensure!(running, "任务已不在运行状态，不能提交结果");
         }
-        let exists: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)",
-            [asset_id],
-            |row| row.get(0),
+        let transcript = insert_transcript(
+            &transaction,
+            asset_id,
+            source_kind,
+            model,
+            language,
+            segments,
+            &indexed,
         )?;
-        ensure!(exists, "课程不存在：{asset_id}");
-        let previous: u32 = transaction.query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM transcripts WHERE asset_id=?1",
-            [asset_id],
-            |row| row.get(0),
-        )?;
-        let version = previous.checked_add(1).context("转写版本数量超出上限")?;
-        let transcript = Transcript {
-            id: Uuid::new_v4().to_string(),
-            asset_id: asset_id.into(),
-            version,
-            source_kind: source_kind.into(),
-            model: model.map(str::to_owned),
-            language: language.into(),
-            segments: segments.to_vec(),
-            created_at: now(),
-            is_active: true,
-        };
-        transaction.execute(
-            "INSERT INTO transcripts (id, asset_id, version, source_kind, model, language, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-            params![transcript.id, transcript.asset_id, transcript.version, transcript.source_kind,
-                transcript.model, transcript.language, transcript.created_at],
-        )?;
-        {
-            let mut statement = transaction.prepare(
-                "INSERT INTO segments (transcript_id, id, ordinal, start_ms, end_ms, text) VALUES (?1,?2,?3,?4,?5,?6)",
-            )?;
-            for (ordinal, segment) in segments.iter().enumerate() {
-                statement.execute(params![
-                    transcript.id,
-                    segment.id,
-                    ordinal as i64,
-                    segment.start_ms,
-                    segment.end_ms,
-                    segment.text
-                ])?;
-            }
-        }
-        transaction.execute(
-            "UPDATE assets SET active_version_id=?1, updated_at=?2 WHERE id=?3",
-            params![transcript.id, transcript.created_at, asset_id],
-        )?;
-        replace_index(&transaction, &transcript, &indexed)?;
         if let Some(job_id) = job_id {
             transaction.execute(
                 "INSERT INTO job_transcripts(job_id,transcript_id) VALUES(?1,?2)",
@@ -671,7 +667,7 @@ fn note_from_row(row: &Row<'_>) -> rusqlite::Result<Note> {
     })
 }
 
-fn load_transcript(connection: &Connection, id: &str) -> Result<Transcript> {
+pub(crate) fn load_transcript(connection: &Connection, id: &str) -> Result<Transcript> {
     let mut transcript = connection
         .query_row(
             "SELECT t.id, t.asset_id, t.version, t.source_kind, t.model, t.language, t.created_at,
@@ -736,7 +732,7 @@ fn replace_index(
     Ok(())
 }
 
-fn index_text(segments: &[Segment]) -> Vec<String> {
+pub(crate) fn index_text(segments: &[Segment]) -> Vec<String> {
     segments
         .iter()
         .map(|segment| tokenize(&segment.text).join(" "))
@@ -760,6 +756,66 @@ fn sqlite_milliseconds(value: u64) -> Result<i64> {
     i64::try_from(value).context("毫秒数超出 SQLite 可支持的范围")
 }
 
-fn now() -> String {
+pub(crate) fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+pub(crate) fn insert_transcript(
+    connection: &Connection,
+    asset_id: &str,
+    source_kind: &str,
+    model: Option<&str>,
+    language: &str,
+    segments: &[Segment],
+    indexed: &[String],
+) -> Result<Transcript> {
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)",
+        [asset_id],
+        |row| row.get(0),
+    )?;
+    ensure!(exists, "课程不存在：{asset_id}");
+    let previous: u32 = connection.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM transcripts WHERE asset_id=?1",
+        [asset_id],
+        |row| row.get(0),
+    )?;
+    let version = previous.checked_add(1).context("转写版本数量超出上限")?;
+    let transcript = Transcript {
+        id: Uuid::new_v4().to_string(),
+        asset_id: asset_id.into(),
+        version,
+        source_kind: source_kind.into(),
+        model: model.map(str::to_owned),
+        language: language.into(),
+        segments: segments.to_vec(),
+        created_at: now(),
+        is_active: true,
+    };
+    connection.execute(
+            "INSERT INTO transcripts (id, asset_id, version, source_kind, model, language, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![transcript.id, transcript.asset_id, transcript.version, transcript.source_kind,
+                transcript.model, transcript.language, transcript.created_at],
+        )?;
+    {
+        let mut statement = connection.prepare(
+                "INSERT INTO segments (transcript_id, id, ordinal, start_ms, end_ms, text) VALUES (?1,?2,?3,?4,?5,?6)",
+            )?;
+        for (ordinal, segment) in segments.iter().enumerate() {
+            statement.execute(params![
+                transcript.id,
+                segment.id,
+                ordinal as i64,
+                segment.start_ms,
+                segment.end_ms,
+                segment.text
+            ])?;
+        }
+    }
+    connection.execute(
+        "UPDATE assets SET active_version_id=?1, updated_at=?2 WHERE id=?3",
+        params![transcript.id, transcript.created_at, asset_id],
+    )?;
+    replace_index(connection, &transcript, indexed)?;
+    Ok(transcript)
 }

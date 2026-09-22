@@ -86,6 +86,84 @@ pub async fn review_integrity(
     .await
 }
 #[tauri::command]
+pub async fn review_integrity_issue(
+    state: State<'_, Arc<Runtime>>,
+    asset_id: String,
+    transcript_id: String,
+    fingerprint: String,
+    issue_id: String,
+    status: String,
+    note: String,
+) -> Reply<super::integrity::IntegrityReport> {
+    blocking(state.inner().clone(), move |s| {
+        s.review_integrity_issue(
+            &asset_id,
+            &transcript_id,
+            &fingerprint,
+            &issue_id,
+            &status,
+            &note,
+        )
+    })
+    .await
+}
+#[tauri::command]
+pub async fn detect_speech(
+    state: State<'_, Arc<Runtime>>,
+    asset_id: String,
+    transcript_id: String,
+) -> Reply<super::integrity::IntegrityReport> {
+    blocking(state.inner().clone(), move |s| {
+        s.detect_speech(&asset_id, &transcript_id)
+    })
+    .await
+}
+#[tauri::command]
+pub fn cancel_quality(state: State<'_, Arc<Runtime>>) {
+    state.cancel_quality();
+}
+#[tauri::command]
+pub async fn recheck_interval(
+    state: State<'_, Arc<Runtime>>,
+    asset_id: String,
+    transcript_id: String,
+    start_ms: u64,
+    end_ms: u64,
+) -> Reply<course_core::quality::RecheckCandidate> {
+    blocking(state.inner().clone(), move |s| {
+        s.recheck_interval(&asset_id, &transcript_id, start_ms, end_ms)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn list_recheck_candidates(
+    state: State<'_, Arc<Runtime>>,
+    asset_id: String,
+    transcript_id: String,
+) -> Reply<Vec<course_core::quality::RecheckCandidate>> {
+    blocking(state.inner().clone(), move |s| {
+        s.list_recheck_candidates(&asset_id, &transcript_id)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn adopt_candidate(
+    state: State<'_, Arc<Runtime>>,
+    candidate_id: String,
+) -> Reply<Transcript> {
+    blocking(state.inner().clone(), move |s| {
+        s.adopt_candidate(&candidate_id)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn discard_candidate(state: State<'_, Arc<Runtime>>, candidate_id: String) -> Reply<()> {
+    blocking(state.inner().clone(), move |s| {
+        s.discard_candidate(&candidate_id)
+    })
+    .await
+}
+#[tauri::command]
 pub async fn initialize_vault(state: State<'_, Arc<Runtime>>) -> Reply<String> {
     blocking(state.inner().clone(), move |s| s.initialize_vault()).await
 }

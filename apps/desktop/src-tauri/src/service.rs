@@ -1,3 +1,5 @@
+#[path = "quality_service.rs"]
+mod quality_service;
 use super::{
     asr::{transcribe_request, AsrEngine, WhisperWorker},
     benchmark::{self, BenchmarkRecord},
@@ -5,7 +7,7 @@ use super::{
     knowledge::{KnowledgeProvider, OpenAiCompatible},
     media,
     process::ProcessControl,
-    profiler::{LocalProfiler, ResourceProfiler, ResourceReport},
+    profiler::{LocalProfiler, ResourceReport},
     settings::{self, AppSettings},
     source::{self, BilibiliProvider, SourcePart, SourcePreview, SourceProvider},
     web_source::WebProvider,
@@ -96,6 +98,7 @@ pub struct Runtime {
     event_sink: Mutex<Option<EventSink>>,
     worker_active: AtomicBool,
     auxiliary_active: AtomicBool,
+    quality_control: Mutex<Option<Arc<ProcessControl>>>,
     shutting_down: AtomicBool,
     mutation_gate: Mutex<()>,
     config_revision: AtomicU64,
@@ -132,6 +135,7 @@ impl Runtime {
             event_sink: Mutex::new(None),
             worker_active: AtomicBool::new(false),
             auxiliary_active: AtomicBool::new(false),
+            quality_control: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
             mutation_gate: Mutex::new(()),
             config_revision: AtomicU64::new(0),
@@ -159,11 +163,14 @@ impl Runtime {
         Ok(())
     }
     pub fn probe_resources(&self) -> Result<ResourceReport> {
+        self.probe_resources_with_control(&ProcessControl::default())
+    }
+    fn probe_resources_with_control(&self, control: &ProcessControl) -> Result<ResourceReport> {
         let revision = self.config_revision.load(Ordering::SeqCst);
         let report = LocalProfiler {
             worker_path: self.worker_path.clone(),
         }
-        .profile(&self.settings())?;
+        .profile_with_control(&self.settings(), control)?;
         let mut cached = self.report.lock().unwrap();
         if revision == self.config_revision.load(Ordering::SeqCst) {
             *cached = Some(report.clone());
@@ -249,9 +256,12 @@ impl Runtime {
         Ok(part)
     }
     fn resolved_settings(&self) -> Result<AppSettings> {
+        self.resolved_settings_with_control(&ProcessControl::default())
+    }
+    fn resolved_settings_with_control(&self, control: &ProcessControl) -> Result<AppSettings> {
         let mut settings = self.settings();
         // Available RAM/VRAM can change while the app stays open.
-        let report = self.probe_resources()?;
+        let report = self.probe_resources_with_control(control)?;
         if settings.preset != "custom" {
             let choice = course_core::resources::recommend(&report.resources, &settings.preset);
             settings.model = choice.model;
@@ -699,7 +709,7 @@ impl Runtime {
             !segments.is_empty(),
             "音频中未识别出有效语音，已有文字版本已保留"
         );
-        self.commit_transcript(
+        let committed = self.commit_transcript(
             job,
             "whisper",
             Some(&job.model),
@@ -707,6 +717,11 @@ impl Runtime {
             &segments,
             control,
         )?;
+        if let Err(error) =
+            db.save_quality_evidence(&committed.id, "diagnostics", &result["segments"])
+        {
+            eprintln!("无法保存识别诊断，文字结果已保留：{error:#}");
+        }
         if result["resumed_chunks"].as_u64().unwrap_or(0) == 0 {
             // Metrics cannot turn a durably completed transcript into a failed
             // task. A full disk here must not cause duplicate versions on retry.
@@ -966,9 +981,15 @@ impl Runtime {
             .map(|s| s.part.duration_ms)
             .filter(|d| *d > 0);
         let mut report = super::integrity::check(&asset, &t, job.as_ref(), source_duration);
+        self.enrich_quality(&asset, &t, &mut report)?;
         report.review = db
             .integrity_review(transcript_id, &report.fingerprint)?
             .map(|(note, reviewed_at)| super::integrity::Review { note, reviewed_at });
+        if report.review.is_none() {
+            report.historical_review = db
+                .latest_integrity_review(transcript_id)?
+                .map(|(note, reviewed_at)| super::integrity::Review { note, reviewed_at });
+        }
         Ok(report)
     }
     pub fn review_integrity(
@@ -1036,13 +1057,18 @@ impl Runtime {
                 && segments.iter().all(|s| existing.contains(s.id.as_str())),
             "文字校对必须保留原始片段 ID"
         );
-        db.save_transcript(
-            asset_id,
-            "edited",
-            active.model.as_deref(),
-            &active.language,
-            segments,
-        )
+        let report = self.check_integrity(asset_id, base_id)?;
+        let issues: Vec<course_core::quality::EditIssue> = report
+            .issues
+            .iter()
+            .map(|issue| course_core::quality::EditIssue {
+                id: issue.id.clone(),
+                code: issue.code.clone(),
+                start_ms: issue.start_ms,
+                end_ms: issue.end_ms,
+            })
+            .collect();
+        db.save_edit_with_reviews(asset_id, base_id, segments, &report.fingerprint, &issues)
     }
     pub fn activate_version(&self, asset_id: &str, transcript_id: &str) -> Result<()> {
         let _gate = self.mutation_gate.lock().unwrap();

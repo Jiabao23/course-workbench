@@ -41,6 +41,23 @@ fn sample() -> (Asset, Transcript, Note) {
     (a, t, n)
 }
 #[test]
+fn vault_snapshot_keeps_individual_resolution_and_audio_evidence_status() {
+    let temp = TempDir::new().unwrap();
+    vault::initialize(temp.path()).unwrap();
+    let (mut a, t, n) = sample();
+    a.duration_ms = 30000;
+    let mut report = check(&a, &t, None, None);
+    report.issues[0].resolution = Some(course_workbench_lib::integrity::Resolution {
+        status: "confirmed".into(),
+        note: "已回听确认是片尾音乐".into(),
+        reviewed_at: "2026-09-23".into(),
+    });
+    let result = vault::sync(temp.path(), &a, &t, &[n], &report).unwrap();
+    let text = fs::read_to_string(result.snapshot_path).unwrap();
+    assert!(text.contains("已回听确认是片尾音乐"));
+    assert!(text.contains("尚未进行音频语音检测"));
+}
+#[test]
 fn local_vault_roundtrip_is_idempotent_and_keeps_personal_edits() {
     let temp = TempDir::new().unwrap();
     let root = temp.path().join("个人 知识库");

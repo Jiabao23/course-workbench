@@ -24,6 +24,23 @@ fn run() -> Result<()> {
     };
     let runtime = Runtime::new(config, course_workbench_lib::worker_path())?;
     let result = match command.as_str() {
+        "detect-speech" => serde_json::to_value(runtime.detect_speech(
+            &args.next().context("missing asset")?,
+            &args.next().context("missing version")?,
+        )?)?,
+        "recheck" => serde_json::to_value(runtime.recheck_interval(
+            &args.next().context("missing asset")?,
+            &args.next().context("missing version")?,
+            args.next().context("missing start ms")?.parse()?,
+            args.next().context("missing end ms")?.parse()?,
+        )?)?,
+        "adopt-candidate" => serde_json::to_value(
+            runtime.adopt_candidate(&args.next().context("missing candidate")?)?,
+        )?,
+        "discard-candidate" => {
+            runtime.discard_candidate(&args.next().context("missing candidate")?)?;
+            json!({"discarded":true})
+        }
         "check" => serde_json::to_value(runtime.check_integrity(
             &args.next().context("missing asset")?,
             &args.next().context("missing version")?,

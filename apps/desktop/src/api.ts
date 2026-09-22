@@ -1,5 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import type { Collection,AppSettings,AssetDetail,IntegrityReport,VaultSyncResult,BenchmarkRecord,Bootstrap,CacheCategory,Job,Note,ResourceReport,SearchHit,Segment,SourcePart,SourcePreview,Transcript } from './types';
+import type { Collection,AppSettings,AssetDetail,IntegrityReport,RecheckCandidate,VaultSyncResult,BenchmarkRecord,Bootstrap,CacheCategory,Job,Note,ResourceReport,SearchHit,Segment,SourcePart,SourcePreview,Transcript } from './types';
 
 export const isDesktop = () => isTauri();
 function call<T>(command:string,args?:Record<string,unknown>):Promise<T> {
@@ -13,6 +13,13 @@ export const api = {
   moveAssets:(assetIds:string[],collectionId:string|null)=>call<void>('move_assets',{assetIds,collectionId}),
   setFavorite:(assetId:string,favorite:boolean)=>call<void>('set_favorite',{assetId,favorite}),
   checkIntegrity:(assetId:string,transcriptId:string)=>call<IntegrityReport>('check_integrity',{assetId,transcriptId}),
+  reviewIntegrityIssue:(assetId:string,transcriptId:string,fingerprint:string,issueId:string,status:'confirmed'|'pending',note:string)=>call<IntegrityReport>('review_integrity_issue',{assetId,transcriptId,fingerprint,issueId,status,note}),
+  detectSpeech:(assetId:string,transcriptId:string)=>call<IntegrityReport>('detect_speech',{assetId,transcriptId}),
+  cancelQuality:()=>call<void>('cancel_quality'),
+  recheckInterval:(assetId:string,transcriptId:string,startMs:number,endMs:number)=>call<RecheckCandidate>('recheck_interval',{assetId,transcriptId,startMs,endMs}),
+  listRecheckCandidates:(assetId:string,transcriptId:string)=>call<RecheckCandidate[]>('list_recheck_candidates',{assetId,transcriptId}),
+  adoptCandidate:(candidateId:string)=>call<Transcript>('adopt_candidate',{candidateId}),
+  discardCandidate:(candidateId:string)=>call<void>('discard_candidate',{candidateId}),
   reviewIntegrity:(assetId:string,transcriptId:string,fingerprint:string,note:string)=>call<IntegrityReport>('review_integrity',{assetId,transcriptId,fingerprint,note}),
   initializeVault:()=>call<string>('initialize_vault'),
   syncVault:(assetId:string,transcriptId:string)=>call<VaultSyncResult>('sync_vault',{assetId,transcriptId}),

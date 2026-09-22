@@ -10,6 +10,20 @@ from test_worker import worker
 
 
 class CheckpointAndProtocolTests(unittest.TestCase):
+    def test_checkpoint_preserves_diagnostics_and_rejects_non_numeric_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "chunk.json"
+            segment = {"id": "s", "start_ms": 0, "end_ms": 1000, "text": "课程",
+                       "diagnostics": {"avg_logprob": -0.7}}
+            data = {"protocol_version": 1, "key": "k", "index": 0,
+                    "start_ms": 0, "end_ms": 1000, "segments": [segment]}
+            worker.atomic_json(path, data)
+            self.assertEqual(worker.read_checkpoint(path, "k", 0, 0, 1000), [segment])
+            for invalid in ({"avg_logprob": True}, {"avg_logprob": "bad"}, []):
+                segment["diagnostics"] = invalid
+                worker.atomic_json(path, data)
+                self.assertIsNone(worker.read_checkpoint(path, "k", 0, 0, 1000))
+
     def test_atomic_checkpoint_accepts_only_matching_configuration_and_bounds(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "checkpoints" / "000001.json"

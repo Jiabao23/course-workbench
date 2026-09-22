@@ -36,6 +36,55 @@ fn runtime() -> (TempDir, std::sync::Arc<Runtime>, PathBuf) {
     (temp, app, source)
 }
 
+#[test]
+fn individual_reviews_keep_pending_items_and_reject_stale_or_invented_evidence() {
+    let (_temp, app, source) = runtime();
+    let asset = imported(&app, &source);
+    let t = app.db().active_transcript(&asset.id).unwrap().unwrap();
+    let report = app.check_integrity(&asset.id, &t.id).unwrap();
+    let issue = &report.issues[0];
+    assert!(app
+        .review_integrity_issue(&asset.id, &t.id, "stale", &issue.id, "confirmed", "已回听")
+        .is_err());
+    assert!(app
+        .review_integrity_issue(
+            &asset.id,
+            &t.id,
+            &report.fingerprint,
+            "invented",
+            "confirmed",
+            "已回听"
+        )
+        .is_err());
+    let next = app
+        .review_integrity_issue(
+            &asset.id,
+            &t.id,
+            &report.fingerprint,
+            &issue.id,
+            "confirmed",
+            "仅字幕，无独立音频",
+        )
+        .unwrap();
+    assert_eq!(next.pending_count, report.pending_count - 1);
+    assert_eq!(next.fingerprint, report.fingerprint);
+    let again = app
+        .review_integrity_issue(
+            &asset.id,
+            &t.id,
+            &report.fingerprint,
+            &issue.id,
+            "pending",
+            "",
+        )
+        .unwrap();
+    assert_eq!(again.pending_count, report.pending_count);
+    assert!(app.detect_speech(&asset.id, &t.id).is_err());
+    assert!(!app.is_busy());
+    assert!(app.recheck_interval(&asset.id, &t.id, 0, 121000).is_err());
+    assert!(!app.is_busy());
+}
+
 fn imported(app: &std::sync::Arc<Runtime>, source: &std::path::Path) -> course_core::Asset {
     let jobs = app
         .create_jobs(CreateJobsRequest {

@@ -55,6 +55,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::check_integrity,
+            commands::review_integrity_issue,
+            commands::detect_speech,
+            commands::cancel_quality,
+            commands::recheck_interval,
+            commands::list_recheck_candidates,
+            commands::adopt_candidate,
+            commands::discard_candidate,
             commands::review_integrity,
             commands::initialize_vault,
             commands::sync_vault,

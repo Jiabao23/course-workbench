@@ -44,6 +44,22 @@ FFmpeg/ffprobe 从 [FFmpeg 官网 Windows 构建入口](https://ffmpeg.org/downl
 
 ## 常见问题
 
+### 可选的本地语音区间检测
+
+已有时间轴检查不需要额外依赖。要对照音频查找疑似漏转，在现有识别
+Python 之外安装扩展目录，再在「设置 → 资料与工具 → 语音检测扩展目录」填写路径：
+
+```powershell
+powershell -File .\scripts\setup-quality.ps1 -Python D:\YourRuntime\Scripts\python.exe -Directory D:\CourseWorkbenchRuntime\quality
+```
+
+脚本需要 uv，使用 `--target --no-deps`，不会修改所选 Python 环境；
+torchaudio 按已有 Torch 版本及 CPU/CUDA 构建匹配。当前实测组合为 Python
+3.12.7、Torch 2.4.1+cu118、Silero VAD 6.2.2，检测本身使用 CPU。
+其他运行时需自行验证兼容性；缺少扩展时仍可使用基础时间轴检查。
+检测按需执行，不会自动下载课程音频。它能提示较长的疑似缺漏，不能验证
+每个字或给出准确率；仍需回听、校对与人工参考稿。
+
 | 现象 | 操作 |
 | --- | --- |
 | 未找到识别环境 | 选择安装了 torch、whisper、numpy 的 Python，然后重新检测 |

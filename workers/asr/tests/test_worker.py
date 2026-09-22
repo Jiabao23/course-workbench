@@ -10,6 +10,16 @@ SPEC.loader.exec_module(worker)
 
 
 class WorkerBehaviorTests(unittest.TestCase):
+    def test_optional_diagnostics_are_finite_numbers_and_old_segments_stay_unchanged(self):
+        raw = {"start": 0, "end": 1, "text": "课程"}
+        self.assertNotIn("diagnostics", worker.normalize_segments([raw], 0, 1000, "k")[0])
+        parsed = worker.normalize_segments([dict(raw, avg_logprob=-0.8, no_speech_prob=0.2,
+                                               compression_ratio=1.4)], 0, 1000, "k")[0]
+        self.assertEqual(parsed["diagnostics"], {"avg_logprob": -0.8, "no_speech_prob": 0.2,
+                                                "compression_ratio": 1.4})
+        invalid = dict(raw, avg_logprob=float("nan"), no_speech_prob=True, compression_ratio="2")
+        self.assertNotIn("diagnostics", worker.normalize_segments([invalid], 0, 1000, "k")[0])
+
     def test_checkpoint_identity_prevents_mixing_models_and_prompts(self):
         with tempfile.TemporaryDirectory() as temp:
             audio = Path(temp) / "a.wav"

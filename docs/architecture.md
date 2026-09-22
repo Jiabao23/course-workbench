@@ -62,3 +62,19 @@ Obsidian 通过标准 URI 打开已注册的 vault 文件。没有安装或注�
 SQLite schema 4 增加 `collections` 与 `asset_organization`。前者为有父级的稳定 ID 树，最多 8 层；后者记录每份课程的唯一分类与独立收藏。缺少记录代表未分类、未收藏。所有分类操作经过 Runtime mutation gate；批量移动在同一事务中校验目标和全部课程。非空分类不可删除，Asset、转写、笔记、FTS 与 Obsidian 文件路径均保持原有身份。
 
 Bootstrap 提供当前数据库的 organization 快照；LibraryView 计算含后代的范围，CollectionNavigation 管理分支菜单，OrganizeDialog 固定待收纳课程集合、显式确认移动。主题存入 AppSettings，CSS 语义色覆盖各页面；缓存只保存主题/布局标识。motion.css 集中管理短过渡并遵循 prefers-reduced-motion，动画不参与写入完成判定。
+
+## 音频证据与逐项复核（v0.5.0）
+
+schema 5 的 quality 模块保存逐项复核、不可变诊断/来源证据、语音证据
+历史和局部识别候选。语音缓存绑定完整音频 SHA256、模型与 worker 文件摘要、
+运行时及检测参数；变化后降回基础检查，旧结论不套用。
+
+quality_service 编排独立 CPU VAD、音频区间提取和 Whisper 复核，共用现有
+资源排他门及进程取消。资源档位解析和 GPU/Python 探测沿用同一取消控制器。
+局部范围扩展到完整原片段且最多 120 秒，结果先持久化为候选。显式采纳在
+事务中写新版本、FTS、父版本/模型/区间来源和相关旧疑点修订记录；手动
+校对仅关联实际文本改动完整覆盖的识别/重复疑点。
+
+前端理由草稿绑定 issue ID 和证据指纹。音频/时长后台刷新不换绑草稿，
+过期时阻止提交并保留可复制/放弃的内容；后台新 active version 不切走
+当前阅读版本。笔记和核对面板保持挂载，收起不清空未保存状态。
