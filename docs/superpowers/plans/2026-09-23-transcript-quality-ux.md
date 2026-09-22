@@ -11,8 +11,10 @@
 - [x] Simplify Reader with collapsible auxiliary pane, quality summary, More menu and explicit excerpt mode; implement per-issue review and candidate comparison. Frontend helper tests first.
 - [x] Run Rust/Python/frontend tests, fmt/Clippy/build; independently review spec compliance and quality.
 - [x] Real isolated desktop validation: VAD, doubt review, local candidate/reject/adopt, version/citations, cancel, no-audio, narrow viewport and keyboard. Distinguish diagnostics from actual CER; no invented human reference.
-- [ ] Package, back up production library, verify upgrade, document precise evidence/limits, commit and push feature branch.
+- [x] Package, back up production library, verify upgrade, document precise evidence/limits, commit and push feature branch.
 
 Ownership: root owns database, Rust service/commands/contracts and integration. Worker implementation agent owns workers/asr only; reader implementation agent owns Reader/IntegrityPanel/new reader CSS/helpers and frontend api/types. Independent reviewers are read-only. Never modify D:\bili2text's existing environment; optional dependencies use a project-owned directory.
 
 Validation evidence: docs/validation-quality-ux-0.5.0.md. Human reference/CER, noise/mixed-language expansion and other-device measurements remain explicitly unverified; no accuracy-improvement claim.
+
+Implementation 0595d3f pushed to feat/course-workbench-v1; NSIS 0.5.0 installed and original schema 4 data verified unchanged after schema 5 migration.
