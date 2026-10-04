@@ -90,3 +90,9 @@ Markdown 实际写盘。该次使用应用默认 fallback 解码，不并入固�
 无人工参考稿，不宣传质量提高。没有真实云 API 密钥，本轮未测云服务质量。
 历史原生选择/跨窗口拖入的 Windows 自动化限制仍存在；本轮安装导入使用
 路径入口。模型常驻和实验分块质量晋级均未启用，理由与证据已记录。
+
+## GitHub 交付
+
+功能提交 `ef6801b4b79b662e32a1295a859324faf0d2819f` 已推送至
+`feat/course-workbench-v1`，已用远端 ref 核对 SHA。[Windows CI](https://github.com/Jiabao23/course-workbench/actions/runs/37213316196)
+在交付核查时运行中；本地检查与安装验证已通过，未把排队/运行中状态写为远端通过。

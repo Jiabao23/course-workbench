@@ -37,10 +37,12 @@
 - [x] Spec review then independent correctness review; fix findings with regressions.
 - [x] Full Rust/Python/frontend checks, fmt/Clippy/build. Real CPU/GPU tests and desktop loop in isolated library/vault; missing/manual-reference limits stated explicitly.
 - [x] Update contracts, user guide, benchmark report and acceptance. Package, back up original library/settings, install and verify original rows/citations unchanged.
-- [ ] Commit/push existing feature branch and verify remote SHA/CI state without claiming queued CI passed.
+- [x] Commit/push existing feature branch and verify remote SHA/CI state without claiming queued CI passed.
 
 Useful commands (PowerShell at repo root): `. .\scripts\dev-env.ps1`; `cargo test --workspace --locked`; `cargo clippy --workspace --all-targets --locked -- -D warnings`; `cargo fmt --all -- --check`; `D:\bili2text\.venv\Scripts\python.exe -m unittest discover -s workers/asr/tests -v`; in apps/desktop: `npm test`, `npm run package`.
 
 Reference/CER gating is a real data dependency: prepare review artifacts and metrics, mark unreviewed audio honestly, continue all independent implementation and hardware measurements. No existing test result establishes human word accuracy.
 
 Measured decisions: faster-whisper is optional; fixed chunking remains default. Both real experimental boundary samples failed alignment validation safely, so quality promotion is not accepted. Model retention is deferred based on recorded load/inference times and 4GB lifecycle costs. See the validation and benchmark reports for exact test scope.
+
+Delivery: implementation commit `ef6801b` pushed and remote SHA verified. Windows CI run [37213316196](https://github.com/Jiabao23/course-workbench/actions/runs/37213316196) was in progress at delivery; local checks and installation passed. No remote success claim is made before completion.
