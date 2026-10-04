@@ -18,6 +18,7 @@ use course_core::{
     Asset, Citation, Db, Job, Note, ResourceRecommendation, SearchHit, Segment, SystemResources,
     Transcript,
 };
+pub use quality_service::RecheckRange;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -612,18 +613,11 @@ impl Runtime {
         }
         if !snapshot.audio_only {
             ensure!(
-                !settings.python_path.is_empty(),
+                !settings.asr_python().is_empty(),
                 "请在设置中配置 Python/Whisper 环境"
             );
-            let canonical_model = match job.model.as_str() {
-                "large" => "large-v3",
-                "turbo" => "large-v3-turbo",
-                model => model,
-            };
             ensure!(
-                Path::new(&settings.model_dir)
-                    .join(format!("{canonical_model}.pt"))
-                    .is_file(),
+                settings.model_available(&job.model),
                 "模型 {} 尚未下载。请在设置中选择该模型并下载，再重试任务。",
                 job.model
             );
@@ -700,7 +694,8 @@ impl Runtime {
             })
             .collect();
         let segments = segments?;
-        super::integrity::require_complete_chunks(
+        super::integrity::require_asr_completion(
+            &result,
             job.chunk_done,
             job.chunk_total,
             asset.duration_ms,
@@ -709,14 +704,22 @@ impl Runtime {
             !segments.is_empty(),
             "音频中未识别出有效语音，已有文字版本已保留"
         );
-        let committed = self.commit_transcript(
-            job,
-            "whisper",
-            Some(&job.model),
-            &settings.language,
-            &segments,
-            control,
-        )?;
+        let mut provenance = json!({"kind":"asr","engine":settings.asr_engine,"model":job.model,"engineVersion":result["engine_version"],"runtimeVersions":result["runtime_versions"],"modelSha256":result["model_sha256"],"audioSha256":result["audio_sha256"],"computeType":result["compute_type"],"decodeOptions":result["decode_options"],"manifest":result["manifest"],"completedChunkIndices":result["completed_chunk_indices"],"plannerVersion":result["planner_version"],"timings":result["timings"]});
+        if result.get("manifest").is_none() {
+            provenance.as_object_mut().unwrap().remove("manifest");
+        }
+        let committed = {
+            let _gate = self.mutation_gate.lock().unwrap();
+            control.check()?;
+            db.save_job_transcript_with_evidence(
+                &job.id,
+                "whisper",
+                Some(&job.model),
+                &settings.language,
+                &segments,
+                Some(&provenance),
+            )?
+        };
         if let Err(error) =
             db.save_quality_evidence(&committed.id, "diagnostics", &result["segments"])
         {
@@ -785,9 +788,7 @@ impl Runtime {
                         || (profile.device == "cpu"
                             && job.device == "cuda"
                             && rank(&profile.model) <= rank(&job.model)))
-                    && Path::new(&snapshot.settings.model_dir)
-                        .join(format!("{}.pt", profile.model))
-                        .is_file()
+                    && snapshot.settings.model_available(&profile.model)
             }))
     }
     pub fn cancel_job(&self, id: &str) -> Result<Job> {
@@ -980,7 +981,18 @@ impl Runtime {
             .and_then(|j| self.read_snapshot(&j.id).ok())
             .map(|s| s.part.duration_ms)
             .filter(|d| *d > 0);
-        let mut report = super::integrity::check(&asset, &t, job.as_ref(), source_duration);
+        let provenance = db.quality_evidence(transcript_id, "provenance")?;
+        let manifest = provenance
+            .as_ref()
+            .filter(|p| p.get("manifest").is_some())
+            .map(|p| (&p["manifest"], &p["completedChunkIndices"]));
+        let mut report = super::integrity::check_with_manifest(
+            &asset,
+            &t,
+            job.as_ref(),
+            source_duration,
+            manifest,
+        );
         self.enrich_quality(&asset, &t, &mut report)?;
         report.review = db
             .integrity_review(transcript_id, &report.fingerprint)?
@@ -1412,6 +1424,9 @@ impl Runtime {
                 success: false,
                 error: Some(format!("{error:#}")),
                 tested: true,
+                engine: settings.asr_engine.clone(),
+                compute_type: settings.compute_type.clone(),
+                measurements: json!({}),
             },
         };
         benchmark::save(&settings, &record)?;

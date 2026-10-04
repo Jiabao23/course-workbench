@@ -30,6 +30,11 @@ pub struct AppSettings {
     pub obsidian_vault: String,
     pub theme: String,
     pub quality_packages_dir: String,
+    pub asr_engine: String,
+    pub faster_python_path: String,
+    pub faster_model_dir: String,
+    pub compute_type: String,
+    pub beam_size: u32,
 }
 
 pub fn find_program(names: &[&str]) -> String {
@@ -106,11 +111,43 @@ impl Default for AppSettings {
             obsidian_vault: String::new(),
             theme: "forest".into(),
             quality_packages_dir: String::new(),
+            asr_engine: "openai-whisper".into(),
+            faster_python_path: String::new(),
+            faster_model_dir: String::new(),
+            compute_type: "auto".into(),
+            beam_size: 1,
         }
     }
 }
 
 impl AppSettings {
+    pub fn asr_python(&self) -> &str {
+        if self.asr_engine == "faster-whisper" {
+            &self.faster_python_path
+        } else {
+            &self.python_path
+        }
+    }
+    pub fn asr_models(&self) -> &str {
+        if self.asr_engine == "faster-whisper" {
+            &self.faster_model_dir
+        } else {
+            &self.model_dir
+        }
+    }
+    pub fn model_available(&self, model: &str) -> bool {
+        let model = match model {
+            "large" => "large-v3",
+            "turbo" => "large-v3-turbo",
+            v => v,
+        };
+        let root = Path::new(self.asr_models());
+        if self.asr_engine == "faster-whisper" {
+            root.join(model).join("model.bin").is_file()
+        } else {
+            root.join(format!("{model}.pt")).is_file()
+        }
+    }
     pub fn data_path(&self) -> PathBuf {
         PathBuf::from(&self.data_dir)
     }
@@ -118,6 +155,37 @@ impl AppSettings {
         self.data_path().join("cache").join(category)
     }
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            ["openai-whisper", "faster-whisper"].contains(&self.asr_engine.as_str()),
+            "未知识别引擎"
+        );
+        ensure!(
+            ["auto", "float32", "float16", "int8", "int8_float16"]
+                .contains(&self.compute_type.as_str()),
+            "未知计算精度"
+        );
+        ensure!((1..=5).contains(&self.beam_size), "束搜索宽度应为 1–5");
+        if self.asr_engine == "faster-whisper" {
+            ensure!(
+                !["turbo", "large-v3-turbo"].contains(&self.model.as_str()),
+                "当前可选引擎请使用 small、medium 或 large-v3 等支持模型"
+            );
+            ensure!(
+                Path::new(&self.faster_model_dir).is_absolute()
+                    && Path::new(&self.faster_python_path).is_absolute(),
+                "请配置独立 faster-whisper Python 与模型目录的绝对路径"
+            );
+        } else {
+            ensure!(
+                ["auto", "float32", "float16"].contains(&self.compute_type.as_str()),
+                "原版 Whisper 不支持 INT8，请选择自动精度或切换引擎"
+            );
+        }
+        ensure!(
+            self.device != "cpu"
+                || !["float16", "int8_float16"].contains(&self.compute_type.as_str()),
+            "CPU 不支持此半精度配置"
+        );
         ensure!(
             ["forest", "paper", "night"].contains(&self.theme.as_str()),
             "未知主题，请选择森林浅色、暖纸米色或深海夜色"

@@ -1,0 +1,87 @@
+{
+  "arch": "x86_64",
+  "benchmark": "quality_interval_difference",
+  "cases": [
+    {
+      "equal": true,
+      "new_median_ms": 0.031099999999999996,
+      "new_samples_ms": [
+        0.0193,
+        0.0331,
+        0.0184,
+        0.031099999999999996,
+        0.049
+      ],
+      "old_median_ms": 0.2318,
+      "old_samples_ms": [
+        0.2318,
+        0.2203,
+        0.2335,
+        0.21800000000000003,
+        0.237
+      ],
+      "speech_intervals": 1000,
+      "speedup": 7.453376205787783,
+      "text_intervals": 1250,
+      "timeline_hours": 1.6666666666666667,
+      "uncovered_intervals": 750
+    },
+    {
+      "equal": true,
+      "new_median_ms": 0.3422,
+      "new_samples_ms": [
+        0.3343,
+        0.3352,
+        0.3748,
+        0.3422,
+        0.348
+      ],
+      "old_median_ms": 21.8779,
+      "old_samples_ms": [
+        21.8779,
+        22.0746,
+        22.8352,
+        21.796599999999998,
+        21.5075
+      ],
+      "speech_intervals": 10000,
+      "speedup": 63.93308007013442,
+      "text_intervals": 12500,
+      "timeline_hours": 16.666666666666668,
+      "uncovered_intervals": 7500
+    },
+    {
+      "equal": true,
+      "new_median_ms": 0.751,
+      "new_samples_ms": [
+        0.7376,
+        0.6138,
+        0.751,
+        0.7948000000000001,
+        0.7974
+      ],
+      "old_median_ms": 206.60410000000002,
+      "old_samples_ms": [
+        199.1582,
+        203.4915,
+        208.82410000000002,
+        212.64620000000002,
+        206.60410000000002
+      ],
+      "speech_intervals": 30000,
+      "speedup": 275.1053262316911,
+      "text_intervals": 37500,
+      "timeline_hours": 50.0,
+      "uncovered_intervals": 22500
+    }
+  ],
+  "memory_scope": "whole benchmark process, including both algorithms and generated fixtures; not a per-algorithm allocation comparison",
+  "os": "windows",
+  "peak_process_working_set_bytes": 6668288,
+  "profile": "release",
+  "synthetic": true,
+  "threshold_ms": 1500,
+  "timing_excludes": "JSON parsing, desktop issue construction, diagnostics and fingerprinting",
+  "timing_includes": "text sorting, merging (new), interval difference and output allocation",
+  "trials_per_case": 5
+}

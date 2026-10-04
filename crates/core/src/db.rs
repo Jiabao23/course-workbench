@@ -146,7 +146,13 @@ CREATE TABLE IF NOT EXISTS recheck_candidates (
     FOREIGN KEY(asset_id,transcript_id) REFERENCES transcripts(asset_id,id)
 );
 CREATE INDEX IF NOT EXISTS candidates_by_base ON recheck_candidates(asset_id,transcript_id);
-PRAGMA user_version = 5;
+CREATE TABLE IF NOT EXISTS speech_cache (
+    audio_fingerprint TEXT NOT NULL,
+    detector_identity TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY(audio_fingerprint,detector_identity)
+);
+PRAGMA user_version = 6;
 "#;
 
 const ASSET_COLUMNS: &str = "id, title, source_kind, source, bvid, page, duration_ms, audio_path, active_version_id, created_at, updated_at";
@@ -174,7 +180,7 @@ impl Db {
         let db = Self { path };
         let mut connection = db.connection()?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        ensure!(version <= 5, "数据库版本较新，请升级应用后打开");
+        ensure!(version <= 6, "数据库版本较新，请升级应用后打开");
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction
             .execute_batch(SCHEMA)
@@ -307,6 +313,17 @@ impl Db {
         language: &str,
         segments: &[Segment],
     ) -> Result<Transcript> {
+        self.save_job_transcript_with_evidence(job_id, source_kind, model, language, segments, None)
+    }
+    pub fn save_job_transcript_with_evidence(
+        &self,
+        job_id: &str,
+        source_kind: &str,
+        model: Option<&str>,
+        language: &str,
+        segments: &[Segment],
+        provenance: Option<&serde_json::Value>,
+    ) -> Result<Transcript> {
         let job = self.get_job(job_id)?;
         self.save_transcript_inner(
             &job.asset_id,
@@ -314,7 +331,7 @@ impl Db {
             model,
             language,
             segments,
-            Some(job_id),
+            Some((job_id, provenance)),
         )
     }
 
@@ -325,7 +342,7 @@ impl Db {
         model: Option<&str>,
         language: &str,
         segments: &[Segment],
-        job_id: Option<&str>,
+        job: Option<(&str, Option<&serde_json::Value>)>,
     ) -> Result<Transcript> {
         validate_segments(segments)?;
         for segment in segments {
@@ -337,7 +354,7 @@ impl Db {
         // Acquire the write lock before finding the next number. Two callers
         // can never allocate the same version or partially replace the index.
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(job_id) = job_id {
+        if let Some((job_id, _)) = job {
             let existing: Option<String> = transaction
                 .query_row(
                     "SELECT transcript_id FROM job_transcripts WHERE job_id=?1",
@@ -360,7 +377,15 @@ impl Db {
             segments,
             &indexed,
         )?;
-        if let Some(job_id) = job_id {
+        if let Some((job_id, provenance)) = job {
+            if let Some(provenance) = provenance {
+                crate::quality::put_evidence(
+                    &transaction,
+                    &transcript.id,
+                    "provenance",
+                    provenance,
+                )?;
+            }
             transaction.execute(
                 "INSERT INTO job_transcripts(job_id,transcript_id) VALUES(?1,?2)",
                 params![job_id, transcript.id],

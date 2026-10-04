@@ -59,6 +59,8 @@ pub fn run() {
             commands::detect_speech,
             commands::cancel_quality,
             commands::recheck_interval,
+            commands::recheck_batch,
+            commands::adopt_candidates,
             commands::list_recheck_candidates,
             commands::adopt_candidate,
             commands::discard_candidate,

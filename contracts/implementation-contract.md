@@ -197,3 +197,53 @@ worker receives that directory via PYTHONPATH. JSONL v1 transcribe segments may
 include diagnostics {avg_logprob,no_speech_prob,compression_ratio}; older
 checkpoints without diagnostics remain valid. quality_worker.py supports
 detect_speech and lightweight detector_identity commands.
+
+
+## Performance and quality (desktop v0.6.0)
+
+Schema 6 adds immutable speech_cache(audio_fingerprint,detector_identity,payload).
+Evidence is reusable across text versions, while review conclusions remain version/report scoped.
+Audio content is fully hashed even for matching paths. Legacy speech payloads/history remain intact.
+
+Commands add recheck_batch(assetId,transcriptId,ranges:[{startMs,endMs}]) and
+adopt_candidates(candidateIds). Expand to complete original segments and merge overlaps;
+limit 5 requests, each <=120s, combined <=300s AFTER expansion. One exclusive resource guard
+covers the batch. Completed candidates survive cancellation/failure. Explicit selection
+atomically adopts disjoint candidates into one version. Unselected candidates stay historical.
+RecheckCandidate adds optional recognitionOptions (legacy defaults null); effective decode,
+engine, runtime, model digest, threads and local-recheck-v2 policy are recorded. Rechecks
+set condition_on_previous_text=false and never silently replace text or auto-loop retries.
+
+AppSettings adds asrEngine (openai-whisper default / faster-whisper), fasterPythonPath,
+fasterModelDir, computeType (auto default), beamSize (1 default). Faster models reside in
+<modelDir>/<canonical-model>/; original .pt models retain their existing directory.
+Quality/VAD always uses pythonPath plus qualityPackagesDir, independent of the ASR engine.
+ResourceReport adds runtimeVersions. Benchmark identity binds runtime versions and decode
+settings; CTranslate2 upgrades cannot reuse previous tested results. Stored raw Faster scores
+are not evaluated against original Whisper diagnostic thresholds without calibration.
+
+JSONL v1 remains one request/process. New request fields: engine, compute_type, beam_size,
+best_of, temperature, condition_on_previous_text, decoding_policy. Original defaults retain
+greedy decoding and original temperature fallback; explicit comparison runs use temperature=0,
+best_of=1. Every decode-affecting option, audio/model/runtime identity, normalization version
+and manifest is bound into the checkpoint key. Existing completed text/citations are unaffected;
+old checkpoint identities are not reused across changed normalization/options.
+
+Done adds engine/runtime/compute/decode_options, audio_sha256, timings, model_loaded,
+manifest_sha256, manifest, completed_chunk_indices, duration_ms and resumed_chunks.
+Timings distinguish dependencies, model validation, audio hashing, load, inference and checkpoint.
+Rust also records worker process wall time. Faster GPU allocator peaks are null (unavailable);
+external benchmarks may separately sample whole-device nvidia-smi memory.used, never conflate it
+with PyTorch allocator peaks.
+
+Every manifest core is contiguous from 0 to media duration; indices/completed list/counts must
+match. Context contains each core and remains within duration. Explicit malformed metadata
+fails; only absent legacy manifests use the historical 300-second check. Required ASR engine,
+manifest and decode provenance commits in the same transaction as transcript/job completion.
+
+Experimental chunk_strategy=speech-boundary is worker-only (not a production setting).
+Its versioned planner covers all audio with bounded cores and context; never skips quiet audio.
+Word alignment and silent context around each internal boundary are required. Boundary speech
+or ambiguity fails clearly before committing the chunk, rather than discarding/duplicating words.
+Continuous-speech fallback is bounded but may be rejected at decoding; use fixed chunking then.
+No accuracy promotion or model session retention is claimed without measured evidence.

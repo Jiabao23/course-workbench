@@ -10,6 +10,16 @@ from test_worker import worker
 
 
 class CheckpointAndProtocolTests(unittest.TestCase):
+    def test_boolean_timestamps_and_empty_ids_are_corrupt_checkpoint_data(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "chunk.json"
+            valid = {"id": "s", "start_ms": 0, "end_ms": 1, "text": "词"}
+            for invalid in (dict(valid, start_ms=False), dict(valid, end_ms=True), dict(valid, id="")):
+                worker.atomic_json(path, {"protocol_version": 1, "key": "k", "index": 0,
+                                         "start_ms": 0, "end_ms": 1000, "segments": [invalid]})
+                with self.subTest(invalid=invalid):
+                    self.assertIsNone(worker.read_checkpoint(path, "k", 0, 0, 1000))
+
     def test_checkpoint_preserves_diagnostics_and_rejects_non_numeric_evidence(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "chunk.json"

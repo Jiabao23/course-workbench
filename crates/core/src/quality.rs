@@ -33,6 +33,8 @@ pub struct RecheckCandidate {
     pub segments: Vec<Segment>,
     pub created_at: String,
     pub audio_fingerprint: String,
+    #[serde(default)]
+    pub recognition_options: Value,
 }
 
 /// A current report issue supplied by the service; core independently restricts
@@ -59,7 +61,7 @@ fn kind_valid(kind: &str) -> Result<()> {
     );
     Ok(())
 }
-fn put_evidence(conn: &Connection, id: &str, kind: &str, value: &Value) -> Result<()> {
+pub(crate) fn put_evidence(conn: &Connection, id: &str, kind: &str, value: &Value) -> Result<()> {
     kind_valid(kind)?;
     let payload = serde_json::to_string(value)?;
     if kind == "speech" {
@@ -83,6 +85,48 @@ fn put_evidence(conn: &Connection, id: &str, kind: &str, value: &Value) -> Resul
 }
 
 impl Db {
+    /// Immutable evidence shared by content, never by path or transcript version.
+    pub fn cache_speech(&self, value: &Value) -> Result<()> {
+        let audio = value["audio_fingerprint"]
+            .as_str()
+            .context("缺少音频摘要")?;
+        let detector = value["detector_identity"]
+            .as_str()
+            .context("缺少检测器身份")?;
+        for digest in [audio, detector] {
+            ensure!(
+                digest.len() == 64 && digest.bytes().all(|c| c.is_ascii_hexdigit()),
+                "无效的依据摘要"
+            );
+        }
+        let speech = value["speech"].as_array().context("缺少语音区间")?;
+        let mut last = 0;
+        for interval in speech {
+            let start = interval["start_ms"].as_u64().context("无效语音起点")?;
+            let end = interval["end_ms"].as_u64().context("无效语音终点")?;
+            ensure!(start >= last && end > start, "语音区间必须有序且不重叠");
+            last = end;
+        }
+        let payload = serde_json::to_string(value)?;
+        let mut conn = self.connection()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute("INSERT INTO speech_cache(audio_fingerprint,detector_identity,payload) VALUES(?1,?2,?3) ON CONFLICT DO NOTHING",params![audio,detector,payload])?;
+        let stored: String = tx.query_row(
+            "SELECT payload FROM speech_cache WHERE audio_fingerprint=?1 AND detector_identity=?2",
+            params![audio, detector],
+            |r| r.get(0),
+        )?;
+        ensure!(
+            serde_json::from_str::<Value>(&stored)? == *value,
+            "同一音频与检测器的依据已保存，不能覆盖"
+        );
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn cached_speech(&self, audio: &str, detector: &str) -> Result<Option<Value>> {
+        let payload: Option<String> = self.connection()?.query_row("SELECT payload FROM speech_cache WHERE audio_fingerprint=?1 AND detector_identity=?2",params![audio,detector],|r|r.get(0)).optional()?;
+        payload.map(|p| Ok(serde_json::from_str(&p)?)).transpose()
+    }
     pub fn save_issue_review(
         &self,
         transcript_id: &str,
@@ -299,6 +343,20 @@ impl Db {
         fingerprint: &str,
         issue_ids: &[String],
     ) -> Result<Transcript> {
+        self.adopt_candidates_with_reviews(&[id.to_owned()], fingerprint, issue_ids)
+    }
+    /// Adopt explicitly selected, disjoint candidates in one transaction/version.
+    pub fn adopt_candidates_with_reviews(
+        &self,
+        ids: &[String],
+        fingerprint: &str,
+        issue_ids: &[String],
+    ) -> Result<Transcript> {
+        ensure!(!ids.is_empty() && ids.len() <= 5, "请选择 1–5 个候选");
+        ensure!(
+            ids.iter().collect::<HashSet<_>>().len() == ids.len(),
+            "候选不能重复"
+        );
         if !issue_ids.is_empty() {
             key(fingerprint)?;
             for issue_id in issue_ids {
@@ -307,18 +365,55 @@ impl Db {
         }
         let mut conn = self.connection()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let candidate = load_candidate(&tx, id)?;
-        let adopted: Option<String> = tx.query_row(
-            "SELECT adopted_transcript_id FROM recheck_candidates WHERE id=?1",
-            [id],
-            |r| r.get(0),
-        )?;
-        if let Some(adopted) = adopted {
-            return load_transcript(&tx, &adopted);
+        let mut candidates = ids
+            .iter()
+            .map(|id| load_candidate(&tx, id))
+            .collect::<Result<Vec<_>>>()?;
+        candidates.sort_by_key(|c| c.start_ms);
+        let candidate = &candidates[0];
+        let adopted: Vec<Option<String>> = ids
+            .iter()
+            .map(|id| {
+                tx.query_row(
+                    "SELECT adopted_transcript_id FROM recheck_candidates WHERE id=?1",
+                    [id],
+                    |r| r.get(0),
+                )
+            })
+            .collect::<rusqlite::Result<_>>()?;
+        if let Some(first) = &adopted[0] {
+            ensure!(
+                adopted.iter().all(|a| a.as_ref() == Some(first)),
+                "候选已分别采纳，请重新加载"
+            );
+            return load_transcript(&tx, first);
         }
+        ensure!(
+            adopted.iter().all(Option::is_none),
+            "部分候选已采纳，请重新加载"
+        );
         let base = load_transcript(&tx, &candidate.transcript_id)?;
         ensure!(base.is_active, "原转写版本已改变，请重新复核");
-        let segments = candidate_segments(&candidate, &base)?;
+        let mut segments = base.segments.clone();
+        let mut total = 0;
+        let mut previous_end = 0;
+        for c in &candidates {
+            ensure!(
+                c.audio_fingerprint == candidate.audio_fingerprint
+                    && c.model == candidate.model
+                    && c.device == candidate.device,
+                "候选音频或配置不一致"
+            );
+            ensure!(c.start_ms >= previous_end, "候选区间重叠，请分开核对");
+            candidate_segments(c, &base)?;
+            total += c.end_ms - c.start_ms;
+            ensure!(total <= 300_000, "一次采纳范围不能超过 300 秒");
+            previous_end = c.end_ms;
+            segments.retain(|s| s.start_ms >= c.end_ms || s.end_ms <= c.start_ms);
+            segments.extend(c.segments.iter().cloned());
+        }
+        segments.sort_by_key(|s| s.start_ms);
+        validate_segments(&segments)?;
         let transcript = insert_transcript(
             &tx,
             &base.asset_id,
@@ -328,16 +423,18 @@ impl Db {
             &segments,
             &index_text(&segments),
         )?;
-        let provenance = serde_json::json!({"baseTranscriptId":base.id,"candidateId":candidate.id,"startMs":candidate.start_ms,"endMs":candidate.end_ms,"model":candidate.model,"device":candidate.device,"audioFingerprint":candidate.audio_fingerprint,"replacedSegmentIds":base.segments.iter().filter(|s|s.start_ms < candidate.end_ms && s.end_ms > candidate.start_ms).map(|s|&s.id).collect::<Vec<_>>()});
+        let provenance = serde_json::json!({"baseTranscriptId":base.id,"candidateId":candidate.id,"candidateIds":ids,"candidates":candidates,"startMs":candidate.start_ms,"endMs":candidate.end_ms,"model":candidate.model,"device":candidate.device,"audioFingerprint":candidate.audio_fingerprint,"replacedSegmentIds":base.segments.iter().filter(|s|candidates.iter().any(|c|s.start_ms < c.end_ms && s.end_ms > c.start_ms)).map(|s|&s.id).collect::<Vec<_>>()});
         put_evidence(&tx, &transcript.id, "provenance", &provenance)?;
         let note = format!("已采用局部复核结果，生成转写版本 {}", transcript.id);
         for issue_id in issue_ids {
             tx.execute("INSERT INTO issue_reviews(transcript_id,fingerprint,issue_id,status,note,reviewed_at) VALUES(?1,?2,?3,'revised',?4,?5) ON CONFLICT(transcript_id,fingerprint,issue_id) DO UPDATE SET status=excluded.status,note=excluded.note,reviewed_at=excluded.reviewed_at",params![base.id,fingerprint,issue_id,note,transcript.created_at])?;
         }
-        tx.execute(
-            "UPDATE recheck_candidates SET adopted_transcript_id=?1 WHERE id=?2",
-            params![transcript.id, id],
-        )?;
+        for id in ids {
+            tx.execute(
+                "UPDATE recheck_candidates SET adopted_transcript_id=?1 WHERE id=?2",
+                params![transcript.id, id],
+            )?;
+        }
         tx.commit()?;
         Ok(transcript)
     }

@@ -78,3 +78,12 @@ quality_service 编排独立 CPU VAD、音频区间提取和 Whisper 复核，�
 前端理由草稿绑定 issue ID 和证据指纹。音频/时长后台刷新不换绑草稿，
 过期时阻止提交并保留可复制/放弃的内容；后台新 active version 不切走
 当前阅读版本。笔记和核对面板保持挂载，收起不清空未保存状态。
+
+## v0.6.0 性能与证据
+
+schema 6 增加按完整音频/检测器身份保存的 speech_cache。每版独立计算覆盖和人工结论。
+区间差集改为排序合并后扫描，诊断使用 ID 索引。ASR provenance、文字、FTS 与任务完成
+同事务保存。JSONL v1 新字段绑定引擎/运行时/量化/解码/manifest 身份，旧协议缺省兼容，
+显式损坏 manifest 拒绝。Python engines 延迟导入可选 faster-whisper；VAD 保持独立原环境。
+批量复核复用排他资源门，逐段持久化候选，采纳在一个事务创建一个版本。
+详情见 [实现合同](../contracts/implementation-contract.md) 和 [使用说明](performance-quality.md)。

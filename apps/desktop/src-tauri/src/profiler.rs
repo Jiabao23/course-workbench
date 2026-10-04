@@ -18,6 +18,8 @@ pub struct ResourceReport {
     pub models: Vec<Value>,
     pub dependencies: Value,
     pub engine_version: Option<String>,
+    #[serde(default)]
+    pub runtime_versions: Value,
 }
 
 pub trait ResourceProfiler: Send + Sync {
@@ -100,7 +102,8 @@ impl LocalProfiler {
         control.check()?;
         let mut dependencies = json!({});
         let mut engine_version = None;
-        if !settings.python_path.is_empty() {
+        let mut runtime_versions = json!({});
+        if !settings.asr_python().is_empty() {
             let worker = WhisperWorker {
                 path: self.worker_path.clone(),
             };
@@ -113,9 +116,15 @@ impl LocalProfiler {
                 Ok(probe) => {
                     dependencies = probe["dependencies"].clone();
                     engine_version = probe["engine_version"].as_str().map(str::to_owned);
-                    resources.python_available = dependencies["whisper"].as_bool().unwrap_or(false)
-                        && dependencies["torch"].as_bool().unwrap_or(false)
-                        && dependencies["numpy"].as_bool().unwrap_or(false);
+                    runtime_versions = probe["runtime_versions"].clone();
+                    resources.python_available =
+                        if settings.asr_engine == "faster-whisper" {
+                            dependencies["faster_whisper"].as_bool().unwrap_or(false)
+                                && dependencies["ctranslate2"].as_bool().unwrap_or(false)
+                        } else {
+                            dependencies["whisper"].as_bool().unwrap_or(false)
+                                && dependencies["torch"].as_bool().unwrap_or(false)
+                        } && dependencies["numpy"].as_bool().unwrap_or(false);
                     resources.cuda_available = probe["cuda_available"].as_bool().unwrap_or(false)
                         && resources.python_available;
                     resources.torch_version = probe["torch_version"].as_str().map(str::to_owned);
@@ -167,13 +176,22 @@ impl LocalProfiler {
                 .warnings
                 .push("尚未配置 FFmpeg，音频转换不可用。".into());
         }
-        let recommendation = recommend(&resources, &settings.preset);
+        let mut recommendation = recommend(&resources, &settings.preset);
+        if settings.asr_engine == "faster-whisper"
+            && ["turbo", "large-v3-turbo"].contains(&recommendation.model.as_str())
+        {
+            recommendation.model = "medium".into();
+            recommendation
+                .reason
+                .push_str(" 可选引擎暂不支持 turbo，候选调整为 medium，需先试跑。");
+        }
         Ok(ResourceReport {
             resources,
             recommendation,
             models,
             dependencies,
             engine_version,
+            runtime_versions,
         })
     }
 }

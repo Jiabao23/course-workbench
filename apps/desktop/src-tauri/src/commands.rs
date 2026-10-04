@@ -123,6 +123,28 @@ pub fn cancel_quality(state: State<'_, Arc<Runtime>>) {
     state.cancel_quality();
 }
 #[tauri::command]
+pub async fn recheck_batch(
+    state: State<'_, Arc<Runtime>>,
+    asset_id: String,
+    transcript_id: String,
+    ranges: Vec<super::service::RecheckRange>,
+) -> Reply<Vec<course_core::quality::RecheckCandidate>> {
+    blocking(state.inner().clone(), move |s| {
+        s.recheck_batch(&asset_id, &transcript_id, &ranges)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn adopt_candidates(
+    state: State<'_, Arc<Runtime>>,
+    candidate_ids: Vec<String>,
+) -> Reply<Transcript> {
+    blocking(state.inner().clone(), move |s| {
+        s.adopt_candidates(&candidate_ids)
+    })
+    .await
+}
+#[tauri::command]
 pub async fn recheck_interval(
     state: State<'_, Arc<Runtime>>,
     asset_id: String,

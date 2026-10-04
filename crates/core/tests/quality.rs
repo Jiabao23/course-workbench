@@ -3,6 +3,97 @@ use common::{asset, segment};
 use course_core::{quality::RecheckCandidate, Db, Transcript};
 use serde_json::json;
 
+#[test]
+fn speech_cache_is_content_and_detector_bound_without_copying_reviews() {
+    let (dir, db, t, _) = setup();
+    let audio = "a".repeat(64);
+    let detector = "b".repeat(64);
+    let evidence = json!({"audio_fingerprint":audio,"detector_identity":detector,
+        "detector_version":"test", "speech":[{"start_ms":0,"end_ms":2000}]});
+    db.cache_speech(&evidence).unwrap();
+    db.cache_speech(&evidence).unwrap();
+    db.save_issue_review(&t.id, "report", "issue", "confirmed", "listened")
+        .unwrap();
+    let edited = db
+        .save_transcript("a", "edited", None, "zh", &t.segments)
+        .unwrap();
+    let reopened = Db::open(&dir.path().join("test.db")).unwrap();
+    assert_eq!(
+        reopened.cached_speech(&audio, &detector).unwrap(),
+        Some(evidence.clone())
+    );
+    assert!(reopened
+        .cached_speech(&"c".repeat(64), &detector)
+        .unwrap()
+        .is_none());
+    assert!(reopened
+        .cached_speech(&audio, &"c".repeat(64))
+        .unwrap()
+        .is_none());
+    assert!(reopened
+        .issue_reviews(&edited.id, "report")
+        .unwrap()
+        .is_empty());
+    let mut changed = evidence.clone();
+    changed["speech"] = json!([]);
+    assert!(db.cache_speech(&changed).is_err());
+    let mut invalid = evidence.clone();
+    invalid["audio_fingerprint"] = json!("bad");
+    assert!(db.cache_speech(&invalid).is_err());
+    invalid = evidence;
+    invalid["speech"] = json!([{"start_ms":5,"end_ms":2}]);
+    assert!(db.cache_speech(&invalid).is_err());
+}
+
+#[test]
+fn batch_adoption_is_atomic_and_rejects_overlap_and_mixed_audio() {
+    let (_dir, db, base, c) = setup();
+    let mut second = c.clone();
+    second.id = "second".into();
+    second.start_ms = 2000;
+    second.end_ms = 3000;
+    second.segments = vec![segment("second-new", 2000, 3000, "lastword")];
+    db.save_candidate(&c).unwrap();
+    db.save_candidate(&second).unwrap();
+    let mut overlap = c.clone();
+    overlap.id = "overlap".into();
+    db.save_candidate(&overlap).unwrap();
+    assert!(db
+        .adopt_candidates_with_reviews(&[c.id.clone(), overlap.id], "fp", &[])
+        .is_err());
+    let mut mixed = second.clone();
+    mixed.id = "mixed".into();
+    mixed.audio_fingerprint = "b".repeat(64);
+    db.save_candidate(&mixed).unwrap();
+    assert!(db
+        .adopt_candidates_with_reviews(&[c.id.clone(), mixed.id], "fp", &[])
+        .is_err());
+    assert_eq!(
+        db.get_asset("a").unwrap().active_version_id,
+        Some(base.id.clone())
+    );
+    let ids = vec![second.id, c.id];
+    let result = db
+        .adopt_candidates_with_reviews(&ids, "fp", &["issue".into()])
+        .unwrap();
+    assert_eq!(result.version, 2);
+    assert_eq!(result.segments[0], base.segments[0]);
+    assert_eq!(result.segments[1].text, "newword");
+    assert_eq!(result.segments[2].text, "lastword");
+    assert_eq!(db.get_transcript(&base.id).unwrap().segments, base.segments);
+    assert_eq!(
+        db.adopt_candidates_with_reviews(&ids, "fp", &[])
+            .unwrap()
+            .id,
+        result.id
+    );
+    assert_eq!(
+        db.issue_reviews(&base.id, "fp").unwrap()[0].status,
+        "revised"
+    );
+    assert!(db.issue_reviews(&result.id, "fp").unwrap().is_empty());
+}
+
 fn setup() -> (tempfile::TempDir, Db, Transcript, RecheckCandidate) {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("test.db")).unwrap();
@@ -32,6 +123,7 @@ fn setup() -> (tempfile::TempDir, Db, Transcript, RecheckCandidate) {
         segments: vec![segment("replacement", 1000, 2000, "newword")],
         created_at: "2026-09-23T00:00:00Z".into(),
         audio_fingerprint: "a".repeat(64),
+        recognition_options: json!({}),
     };
     (dir, db, t, c)
 }
@@ -162,7 +254,7 @@ fn migration_from_four_preserves_references() {
     assert_eq!(
         conn.pragma_query_value::<u32, _>(None, "user_version", |r| r.get(0))
             .unwrap(),
-        5
+        6
     );
     assert_eq!(db.get_transcript(&t.id).unwrap().segments, t.segments);
     assert!(db

@@ -78,3 +78,11 @@ TypeScript/Vite 通过。真实 CPU VAD 识别隔离副本中构造的讲话缺�
 small/CUDA 局部候选、重载恢复、显式采纳、旧引用定位、手动校对、取消、
 Markdown 与独立 vault 同步均已验证。具体证据、安装状态及未测边界见
 [v0.5.0 验证记录](validation-quality-ux-0.5.0.md)。尚无 CER 或准确率提升结论。
+
+## v0.6.0 算法、性能与质量核对
+
+229 项自动化检查通过（Rust 132、worker 52、质量指标 4、前端 41），fmt、Clippy、
+生产构建及 NSIS 安装通过。完成真实 CUDA 九轮对照、CPU INT8、worker 强制中断恢复、
+桌面批量采纳/中途取消与安装版新引擎导入、回听、导出。schema 6 升级后全部旧表与
+Obsidian 文件摘要一致。没有人工参考稿，不声称识别准确率提升；实验分块因对齐不足
+被拒绝，未改生产默认。详见 [验证记录](validation-performance-quality-0.6.0.md)。

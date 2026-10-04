@@ -1,8 +1,12 @@
 //! Conservative completeness checks: evidence of processing, never word accuracy.
 use anyhow::{ensure, Result};
-use course_core::{Asset, Job, Transcript};
+use course_core::{
+    quality_intervals::{overlaps_speech, uncovered_speech},
+    Asset, Job, Transcript,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,11 +72,89 @@ pub fn require_complete_chunks(done: u32, total: u32, duration_ms: u64) -> Resul
     Ok(())
 }
 
+pub fn require_asr_completion(
+    result: &serde_json::Value,
+    done: u32,
+    total: u32,
+    duration_ms: u64,
+) -> Result<()> {
+    match result.get("manifest") {
+        Some(manifest) => require_complete_manifest(
+            manifest,
+            &result["completed_chunk_indices"],
+            done,
+            total,
+            duration_ms,
+        ),
+        None => require_complete_chunks(done, total, duration_ms),
+    }
+}
+
+/// Worker manifests prove each core interval was processed, independently of ASR text.
+pub fn require_complete_manifest(
+    manifest: &serde_json::Value,
+    completed: &serde_json::Value,
+    done: u32,
+    total: u32,
+    duration_ms: u64,
+) -> Result<()> {
+    let chunks = manifest
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("缺少分块清单"))?;
+    let completed = completed
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("缺少已完成分块记录"))?;
+    ensure!(
+        !chunks.is_empty()
+            && duration_ms > 0
+            && chunks.len() == total as usize
+            && done == total
+            && completed.len() == chunks.len(),
+        "分块清单未完成，已保留检查点"
+    );
+    let mut cursor = 0;
+    for (index, chunk) in chunks.iter().enumerate() {
+        let integer = |name| {
+            chunk[name]
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("分块时间无效"))
+        };
+        let start = integer("start_ms")?;
+        let end = integer("end_ms")?;
+        ensure!(
+            integer("index")? == index as u64 && completed[index].as_u64() == Some(index as u64),
+            "完成记录与分块清单不一致"
+        );
+        ensure!(
+            start == cursor
+                && end > start
+                && end - start <= 1_800_000
+                && integer("decode_start_ms")? <= start
+                && integer("decode_end_ms")? >= end
+                && integer("decode_end_ms")? <= duration_ms,
+            "分块范围缺漏、重叠或越界"
+        );
+        cursor = end;
+    }
+    ensure!(cursor == duration_ms, "分块未覆盖音频末尾");
+    Ok(())
+}
+
 pub fn check(
     asset: &Asset,
     transcript: &Transcript,
     job: Option<&Job>,
     source_duration: Option<u64>,
+) -> IntegrityReport {
+    check_with_manifest(asset, transcript, job, source_duration, None)
+}
+
+pub fn check_with_manifest(
+    asset: &Asset,
+    transcript: &Transcript,
+    job: Option<&Job>,
+    source_duration: Option<u64>,
+    manifest: Option<(&serde_json::Value, &serde_json::Value)>,
 ) -> IntegrityReport {
     // A standalone caption's end time is not independent evidence of media length.
     let duration =
@@ -102,8 +184,12 @@ pub fn check(
     }
     if matches!(transcript.source_kind.as_str(), "whisper" | "edited") {
         if let Some(job) = job {
-            if duration.is_some_and(|d| {
-                require_complete_chunks(job.chunk_done, job.chunk_total, d).is_err()
+            if duration.is_some_and(|d| match manifest {
+                Some((plan, completed)) => {
+                    require_complete_manifest(plan, completed, job.chunk_done, job.chunk_total, d)
+                        .is_err()
+                }
+                None => require_complete_chunks(job.chunk_done, job.chunk_total, d).is_err(),
             }) {
                 add(
                     "incompleteChunks",
@@ -223,6 +309,11 @@ pub fn check(
     ))
     .expect("serializable report");
     report.fingerprint = hex::encode(Sha256::digest(bytes));
+    if let Some(evidence) = manifest {
+        report.fingerprint = hex::encode(Sha256::digest(
+            serde_json::to_vec(&(&report.fingerprint, evidence)).expect("serializable manifest"),
+        ));
+    }
     report
 }
 
@@ -233,6 +324,19 @@ pub fn add_quality_evidence(
     speech: Option<&serde_json::Value>,
     diagnostics: Option<&serde_json::Value>,
 ) -> Result<()> {
+    let diagnostic_values = diagnostics.and_then(|d| d.as_array());
+    let mut diagnostics_by_id = HashMap::new();
+    if let Some(values) = diagnostic_values {
+        for value in values {
+            if let Some(id) = value["id"].as_str() {
+                ensure!(
+                    diagnostics_by_id.insert(id, value).is_none(),
+                    "识别诊断片段标识重复：{id}"
+                );
+            }
+        }
+    }
+    let mut issue_ids: HashSet<_> = report.issues.iter().map(|issue| issue.id.clone()).collect();
     if let Some(evidence) = speech {
         let values = evidence["speech"]
             .as_array()
@@ -260,9 +364,7 @@ pub fn add_quality_evidence(
         // Retain structural faults; time gaps alone are lower-priority when independent audio is available.
         for issue in &mut report.issues {
             if ["head", "gap", "tail"].contains(&issue.code.as_str())
-                && !intervals
-                    .iter()
-                    .any(|&(a, b)| a < issue.end_ms && b > issue.start_ms)
+                && !overlaps_speech(&intervals, issue.start_ms, issue.end_ms)
             {
                 issue.severity = "info".into();
                 issue
@@ -270,60 +372,42 @@ pub fn add_quality_evidence(
                     .push_str(" 语音检测未发现讲话，可能为静音；保留时间轴空白供复核。");
             }
         }
-        let mut text: Vec<_> = transcript.segments.iter().collect();
-        text.sort_by_key(|s| s.start_ms);
-        for (start, end) in intervals {
-            let mut cursor = start;
-            for s in &text {
-                if s.end_ms <= cursor {
-                    continue;
-                }
-                if s.start_ms >= end {
-                    break;
-                }
-                let missing_end = s.start_ms.min(end);
-                if missing_end.saturating_sub(cursor) >= 1500 {
-                    push_issue(
-                        report,
-                        "uncoveredSpeech",
-                        cursor,
-                        missing_end,
-                        "检测到讲话但缺少对应文字，可能漏转；请回听确认。",
-                    );
-                }
-                cursor = cursor.max(s.end_ms).min(end);
-            }
-            if end.saturating_sub(cursor) >= 1500 {
-                push_issue(
-                    report,
-                    "uncoveredSpeech",
-                    cursor,
-                    end,
-                    "检测到讲话但缺少对应文字，可能漏转；请回听确认。",
-                );
-            }
+        let text: Vec<_> = transcript
+            .segments
+            .iter()
+            .map(|s| (s.start_ms, s.end_ms))
+            .collect();
+        for (start, end) in uncovered_speech(&intervals, &text) {
+            push_issue(
+                report,
+                &mut issue_ids,
+                "uncoveredSpeech",
+                start,
+                end,
+                "检测到讲话但缺少对应文字，可能漏转；请回听确认。",
+            );
         }
         report.audio_check = AudioCheck {
             status: "available".into(),
             message: "已对照本地音频语音活动；短漏字和识别错误仍需回听".into(),
         };
     }
-    if let Some(values) = diagnostics.and_then(|d| d.as_array()) {
+    if let Some(values) = diagnostic_values {
         report.diagnostics_available = !transcript.segments.is_empty()
             && transcript.segments.iter().all(|segment| {
-                values.iter().any(|v| {
-                    v["id"].as_str() == Some(segment.id.as_str())
-                        && ["avg_logprob", "no_speech_prob", "compression_ratio"]
-                            .iter()
-                            .all(|key| v["diagnostics"][key].as_f64().is_some_and(f64::is_finite))
+                diagnostics_by_id.get(segment.id.as_str()).is_some_and(|v| {
+                    ["avg_logprob", "no_speech_prob", "compression_ratio"]
+                        .iter()
+                        .all(|key| v["diagnostics"][key].as_f64().is_some_and(f64::is_finite))
                 })
             });
+        let mut segments_by_id = HashMap::with_capacity(transcript.segments.len());
+        for segment in &transcript.segments {
+            // Preserve the old first-match behavior for malformed legacy IDs.
+            segments_by_id.entry(segment.id.as_str()).or_insert(segment);
+        }
         for value in values {
-            let Some(segment) = transcript
-                .segments
-                .iter()
-                .find(|s| Some(s.id.as_str()) == value["id"].as_str())
-            else {
+            let Some(segment) = value["id"].as_str().and_then(|id| segments_by_id.get(id)) else {
                 continue;
             };
             let d = &value["diagnostics"];
@@ -339,6 +423,7 @@ pub fn add_quality_evidence(
             {
                 push_issue(
                     report,
+                    &mut issue_ids,
                     "recognitionDoubt",
                     segment.start_ms,
                     segment.end_ms,
@@ -368,9 +453,16 @@ pub fn add_quality_evidence(
     }
     Ok(())
 }
-fn push_issue(report: &mut IntegrityReport, code: &str, start_ms: u64, end_ms: u64, message: &str) {
+fn push_issue(
+    report: &mut IntegrityReport,
+    issue_ids: &mut HashSet<String>,
+    code: &str,
+    start_ms: u64,
+    end_ms: u64,
+    message: &str,
+) {
     let id = format!("{code}:{start_ms}:{end_ms}");
-    if !report.issues.iter().any(|i| i.id == id) {
+    if issue_ids.insert(id.clone()) {
         report.issues.push(Issue {
             id,
             severity: "warning".into(),

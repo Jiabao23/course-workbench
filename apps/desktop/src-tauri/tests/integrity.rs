@@ -2,6 +2,181 @@ use course_core::{Asset, Segment, Transcript};
 use course_workbench_lib::integrity::{check, require_complete_chunks};
 
 #[test]
+fn supplied_invalid_manifest_cannot_fall_back_to_legacy_counts() {
+    use course_workbench_lib::integrity::require_asr_completion;
+    assert!(require_asr_completion(&serde_json::json!({}), 1, 1, 60_000).is_ok());
+    for malformed in [
+        serde_json::json!(null),
+        serde_json::json!({}),
+        serde_json::json!("bad"),
+    ] {
+        assert!(
+            require_asr_completion(&serde_json::json!({"manifest":malformed}), 1, 1, 60_000)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn manifest_completion_requires_full_ownership_and_each_completed_index() {
+    use course_workbench_lib::integrity::require_complete_manifest;
+    let manifest = serde_json::json!([
+        {"index":0,"start_ms":0,"end_ms":290000,"decode_start_ms":0,"decode_end_ms":292000},
+        {"index":1,"start_ms":290000,"end_ms":356608,"decode_start_ms":288000,"decode_end_ms":356608}
+    ]);
+    assert!(require_complete_manifest(&manifest, &serde_json::json!([0, 1]), 2, 2, 356608).is_ok());
+    assert!(
+        require_complete_manifest(&manifest, &serde_json::json!([0, 0]), 2, 2, 356608).is_err()
+    );
+    assert!(require_complete_manifest(&manifest, &serde_json::json!([0]), 1, 2, 356608).is_err());
+    let mut gap = manifest.clone();
+    gap[1]["start_ms"] = serde_json::json!(290001);
+    assert!(require_complete_manifest(&gap, &serde_json::json!([0, 1]), 2, 2, 356608).is_err());
+    let mut truncated = manifest.clone();
+    truncated[1]["end_ms"] = serde_json::json!(356000);
+    assert!(
+        require_complete_manifest(&truncated, &serde_json::json!([0, 1]), 2, 2, 356608).is_err()
+    );
+    let mut invalid = manifest;
+    invalid[0]["decode_start_ms"] = serde_json::json!(1);
+    assert!(require_complete_manifest(&invalid, &serde_json::json!([0, 1]), 2, 2, 356608).is_err());
+}
+
+#[test]
+fn duplicate_diagnostic_ids_are_rejected_before_enriching_the_report() {
+    let (a, t) = sample();
+    let mut report = check(&a, &t, None, None);
+    let before = serde_json::to_value(&report).unwrap();
+    let diagnostics = serde_json::json!([
+        {"id":"a","diagnostics":{"avg_logprob":-0.2,"compression_ratio":1.0,"no_speech_prob":0.1}},
+        {"id":"a","diagnostics":{"avg_logprob":-1.4,"compression_ratio":3.1,"no_speech_prob":0.9}}
+    ]);
+    let speech = serde_json::json!({"speech":[{"start_ms":18000,"end_ms":25000}]});
+    let error = course_workbench_lib::integrity::add_quality_evidence(
+        &mut report,
+        &t,
+        Some(&speech),
+        Some(&diagnostics),
+    )
+    .expect_err("duplicate diagnostic IDs must not choose an arbitrary observation");
+    assert!(error.to_string().contains("重复"));
+    assert_eq!(serde_json::to_value(&report).unwrap(), before);
+}
+
+#[test]
+fn enrichment_preserves_issue_order_and_quality_fingerprint() {
+    use sha2::{Digest, Sha256};
+
+    let (a, t) = sample();
+    let mut report = check(&a, &t, None, None);
+    let original_fingerprint = report.fingerprint.clone();
+    let speech = serde_json::json!({"speech":[
+        {"start_ms":10000,"end_ms":13000},
+        {"start_ms":14500,"end_ms":30000},
+        {"start_ms":35000,"end_ms":39000}
+    ]});
+    // Keep diagnostics in their evidence order, even when transcript order differs.
+    let diagnostics = serde_json::json!([
+        {"id":"b","diagnostics":{"avg_logprob":-1.5,"compression_ratio":1.0,"no_speech_prob":0.1}},
+        {"id":"unrelated","diagnostics":{"avg_logprob":-9.0}},
+        {"id":"a","diagnostics":{"avg_logprob":-0.2,"compression_ratio":3.0,"no_speech_prob":0.1}}
+    ]);
+    course_workbench_lib::integrity::add_quality_evidence(
+        &mut report,
+        &t,
+        Some(&speech),
+        Some(&diagnostics),
+    )
+    .unwrap();
+    assert_eq!(
+        report
+            .issues
+            .iter()
+            .map(|i| (i.id.as_str(), i.severity.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("unknownChunks:0:0", "warning"),
+            ("gap:10000:30000", "warning"),
+            ("tail:35000:60000", "warning"),
+            ("uncoveredSpeech:10000:13000", "warning"),
+            ("uncoveredSpeech:14500:30000", "warning"),
+            ("uncoveredSpeech:35000:39000", "warning"),
+            ("recognitionDoubt:30000:35000", "warning"),
+            ("recognitionDoubt:0:10000", "warning"),
+        ]
+    );
+    assert_eq!(report.pending_count, 8);
+    assert!(report.diagnostics_available);
+    let expected_fingerprint = hex::encode(Sha256::digest(
+        serde_json::to_vec(&(
+            original_fingerprint,
+            "quality-v1",
+            Some(&speech),
+            Some(&diagnostics),
+        ))
+        .unwrap(),
+    ));
+    assert_eq!(report.fingerprint, expected_fingerprint);
+
+    course_workbench_lib::integrity::add_quality_evidence(
+        &mut report,
+        &t,
+        None,
+        Some(&diagnostics),
+    )
+    .unwrap();
+    assert_eq!(
+        report.issues.len(),
+        8,
+        "existing issue IDs remain deduplicated"
+    );
+}
+
+#[test]
+fn touching_speech_does_not_raise_silent_gap_priority() {
+    let (a, t) = sample();
+    let mut report = check(&a, &t, None, None);
+    let speech = serde_json::json!({"speech":[
+        {"start_ms":0,"end_ms":10000},
+        {"start_ms":30000,"end_ms":35000}
+    ]});
+    course_workbench_lib::integrity::add_quality_evidence(&mut report, &t, Some(&speech), None)
+        .unwrap();
+    assert_eq!(
+        report
+            .issues
+            .iter()
+            .map(|i| (i.code.as_str(), i.severity.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("unknownChunks", "warning"),
+            ("gap", "info"),
+            ("tail", "info")
+        ]
+    );
+    assert_eq!(report.pending_count, 1);
+}
+
+#[test]
+fn incomplete_diagnostics_stay_unavailable_and_thresholds_remain_strict() {
+    let (a, t) = sample();
+    let mut report = check(&a, &t, None, None);
+    let diagnostics = serde_json::json!([
+        {"id":"a","diagnostics":{"avg_logprob":-1.0,"compression_ratio":2.4,"no_speech_prob":0.6}},
+        {"id":"b","diagnostics":{"avg_logprob":-0.1,"compression_ratio":1.0}}
+    ]);
+    course_workbench_lib::integrity::add_quality_evidence(
+        &mut report,
+        &t,
+        None,
+        Some(&diagnostics),
+    )
+    .unwrap();
+    assert!(!report.diagnostics_available);
+    assert!(report.issues.iter().all(|i| i.code != "recognitionDoubt"));
+}
+
+#[test]
 fn speech_evidence_finds_uncovered_voice_without_flagging_silent_tail() {
     let (a, t) = sample();
     let mut r = check(&a, &t, None, None);

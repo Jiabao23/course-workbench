@@ -1,4 +1,4 @@
-import { useEffect,useMemo,useRef,useState } from 'react';
+import { useCallback,useEffect,useMemo,useRef,useState } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { save } from '@tauri-apps/plugin-dialog';
 import ReactMarkdown,{defaultUrlTransform} from 'react-markdown';
@@ -9,7 +9,7 @@ import { citationTarget,durationLabel,safeFilename,selectedText,sourceAt,sourceL
 import { Empty,Modal,Spinner,useConfirm } from './Common';
 import IntegrityPanel from './IntegrityPanel';
 import './ReaderQuality.css';
-import { readerVersionAfterRefresh } from './readerQuality';
+import { createAudioLoop, readerVersionAfterRefresh, type TimeRange } from './readerQuality';
 
 function NoteBody({note,onCitation,onError}:{note:Note;onCitation:(citation:Citation)=>void;onError:(error:string)=>void}) {
   const content=note.content.replace(/\[引用:([^\]]+)\]/g,(original,id:string)=>{
@@ -30,6 +30,17 @@ export default function Reader({detail,settings,apiKeyConfigured,onBack,onChange
   const [aux,setAux]=useState<'notes'|'quality'|null>(()=>{try{const saved=localStorage.getItem('reader.aux');return saved==='notes'||saved==='quality'?saved:null;}catch{return null;}}),[excerpt,setExcerpt]=useState(false),[historyOpen,setHistoryOpen]=useState(false),[qualityBusy,setQualityBusy]=useState(false),[qualityText,setQualityText]=useState('正在检查文字时间轴');
   useEffect(()=>{try{localStorage.setItem('reader.aux',aux??'closed');}catch{}},[aux]);
   const audio=useRef<HTMLAudioElement>(null),list=useRef<HTMLDivElement>(null);const {confirm,dialog}=useConfirm();
+  const [loopRange,setLoopRange]=useState<TimeRange|null>(null),[playbackRate,setPlaybackRate]=useState(1);
+  const audioLoop=useRef<ReturnType<typeof createAudioLoop>|null>(null),audioError=useRef(onError);
+  audioError.current=onError;
+  const clearLoop=useCallback(()=>{audioLoop.current?.clear();},[]);
+  useEffect(()=>{
+    if(!audio.current)return;
+    const controller=createAudioLoop(audio.current,setLoopRange,message=>audioError.current(message));audioLoop.current=controller;
+    return()=>{controller.dispose();audioLoop.current=null;};
+  },[detail.asset.audioPath]);
+  useEffect(()=>{clearLoop();},[viewId,reviewEpoch,clearLoop]);
+  useEffect(()=>{if(audio.current)audio.current.playbackRate=playbackRate;},[playbackRate,detail.asset.audioPath]);
   useEffect(()=>{
     const closeMore=(event:KeyboardEvent|PointerEvent)=>{
       const menu=document.querySelector<HTMLDetailsElement>('.reader-more[open]');
@@ -60,7 +71,7 @@ export default function Reader({detail,settings,apiKeyConfigured,onBack,onChange
   async function changeVersion(id:string){await guarded(()=>{setViewId(id);setFilter('');});}
   async function persistEdit(){if(!view)return;setBusy('保存修订版本');try{const version=await api.saveEdit(detail.asset.id,editBase,draft);setEditing(false);setViewId(version.id);await onChanged();}catch(e){onError(errorMessage(e));}finally{setBusy('');}}
   async function activate(){if(!view)return;setBusy('切换版本');try{await api.activateVersion(detail.asset.id,view.id);await onChanged();}catch(e){onError(errorMessage(e));}finally{setBusy('');}}
-  async function play(segment:Segment){setHighlight(segment.id);if(audio.current&&detail.asset.audioPath){audio.current.currentTime=segment.startMs/1000;try{await audio.current.play();}catch(e){onError(errorMessage(e));}}else{const url=sourceAt(detail.asset,segment.startMs);if(url)try{await api.openExternal(url);}catch(e){onError(errorMessage(e));}}}
+  async function play(segment:Segment){clearLoop();setHighlight(segment.id);if(audio.current&&detail.asset.audioPath){audio.current.currentTime=segment.startMs/1000;try{await audio.current.play();}catch(e){onError(errorMessage(e));}}else{const url=sourceAt(detail.asset,segment.startMs);if(url)try{await api.openExternal(url);}catch(e){onError(errorMessage(e));}}}
   async function jump(note:Note,citation:Citation){const target=citationTarget(detail.versions,note.transcriptId,citation);if(!target){onError('这条引用对应的原文版本不可用。');return;}await guarded(()=>{setViewId(target.version.id);setFilter('');setHighlight(target.segment.id);});}
   async function getAudio(){setBusy('添加回听任务');try{await api.ensureAudio(detail.asset.id);await onChanged();}catch(e){onError(errorMessage(e));}finally{setBusy('');}}
   async function saveNote(){if(!view)return;setBusy('保存笔记');try{await api.saveManualNote(detail.asset.id,view.id,noteTitle,noteContent,scope.segments.map(s=>s.id));setNoteTitle('');setNoteContent('');setNoteMode('saved');await onChanged();}catch(e){onError(errorMessage(e));}finally{setBusy('');}}
@@ -70,7 +81,8 @@ export default function Reader({detail,settings,apiKeyConfigured,onBack,onChange
   async function exportNow(){if(!view)return;setBusy('导出文件');try{await api.exportAsset(detail.asset.id,format,destination,view.id);setExporting(false);onError(`已导出：${destination}`);}catch(e){onError(errorMessage(e));}finally{setBusy('');}}
   async function syncVault(){if(!view)return;if(!settings.obsidianVault){onSettings();return;}if(unsaved){onError('请先保存校对、笔记与核对结论，再同步。');return;}setBusy('同步本地知识库');setVaultFeedback('');try{const result=await api.syncVault(detail.asset.id,view.id);setVaultFeedback(`${result.created?'已创建快照':'此快照已同步，无需重复写入'}：${result.snapshotPath}`);}catch(e){onError(errorMessage(e));}finally{setBusy('');}}
   async function retranscribe(){if(unsaved){onError('请先保存未完成的编辑。');return;}if(!(await confirm('按当前识别设置重新处理此课程，完成后生成独立文字版本；原文与历史笔记保留。继续？')))return;setBusy('添加重新转写任务');try{await api.createJobs(detail.asset.source,[detail.asset.page??1],'transcribe');await onChanged();}catch(e){onError(errorMessage(e));}finally{setBusy('');}}
-  function seekIssue(ms:number){setFilter('');const target=view?.segments.find(s=>s.endMs>=ms)??view?.segments.at(-1);if(target)void play({...target,startMs:ms});}
+  function seekIssue(ms:number){clearLoop();setFilter('');const target=view?.segments.find(s=>s.endMs>=ms)??view?.segments.at(-1);if(target)void play({...target,startMs:ms});else if(audio.current&&detail.asset.audioPath){audio.current.currentTime=ms/1000;void audio.current.play().catch(e=>onError(errorMessage(e)));}}
+  function loopIssue(range:TimeRange){setFilter('');const target=view?.segments.find(s=>s.endMs>=range.startMs);if(target)setHighlight(target.id);void audioLoop.current?.start(range);}
   async function adopted(version:Transcript){await onChanged();setViewId(version.id);setSelected(new Set());setFilter('');}
   const active=view?.id===detail.asset.activeVersionId;
   const remoteSource=Boolean(sourceAt(detail.asset,0));
@@ -82,7 +94,7 @@ export default function Reader({detail,settings,apiKeyConfigured,onBack,onChange
       {view&&<button className="quality-summary" aria-expanded={aux==='quality'} onClick={()=>setAux(aux==='quality'?null:'quality')}>{qualityText}<ChevronDown size={14}/></button>}
       {vaultFeedback&&<div className="vault-feedback">{vaultFeedback}<button onClick={()=>void api.openVaultNote(detail.asset.id).catch(e=>onError(errorMessage(e)))}>在 Obsidian 打开课程</button></div>}
       {!active&&view&&<div className="version-notice">正在查看历史版本 {view.version}，引用保持与当时原文一致。</div>}
-      {detail.asset.audioPath?<div className="audio-bar"><Volume2 size={18}/><audio ref={audio} controls preload="metadata" src={convertFileSrc(detail.asset.audioPath)} aria-label="课程回听"/><button className="icon-button" title="后退 5 秒" aria-label="后退 5 秒" onClick={()=>{if(audio.current)audio.current.currentTime=Math.max(0,audio.current.currentTime-5);}}>−5s</button></div>:<div className="audio-empty"><ExternalLink size={15}/><span>{remoteSource?(detail.asset.bvid?'点击时间戳可回到原视频。':'点击时间戳可打开原网页，部分网站支持时间定位。'):detail.asset.sourceKind==='subtitle'?'字幕文件未包含音频，目前仅能检查文字时间轴。':'尚无本地回听音频。'}</span>{detail.asset.sourceKind!=='subtitle'&&<button className="text-button" disabled={!!busy||qualityBusy} onClick={()=>void getAudio()}>获取本地回听音频</button>}</div>}
+      {detail.asset.audioPath?<div className="audio-bar"><Volume2 size={18}/><audio ref={audio} controls preload="metadata" src={convertFileSrc(detail.asset.audioPath)} aria-label="课程回听"/><button className="icon-button" title="后退 5 秒" aria-label="后退 5 秒" onClick={()=>{clearLoop();if(audio.current)audio.current.currentTime=Math.max(0,audio.current.currentTime-5);}}>−5s</button><label className="audio-speed">速度<select aria-label="回听速度" value={playbackRate} onChange={e=>setPlaybackRate(Number(e.target.value))}>{[0.5,0.75,1,1.25,1.5,2].map(rate=><option key={rate} value={rate}>{rate}×</option>)}</select></label>{loopRange&&<span className="audio-loop-status" role="status">循环 {timeLabel(loopRange.startMs)}–{timeLabel(loopRange.endMs)}<button className="text-button" onClick={clearLoop}>停止循环</button></span>}</div>:<div className="audio-empty"><ExternalLink size={15}/><span>{remoteSource?(detail.asset.bvid?'点击时间戳可回到原视频。':'点击时间戳可打开原网页，部分网站支持时间定位。'):detail.asset.sourceKind==='subtitle'?'字幕文件未包含音频，目前仅能检查文字时间轴。':'尚无本地回听音频。'}</span>{detail.asset.sourceKind!=='subtitle'&&<button className="text-button" disabled={!!busy||qualityBusy} onClick={()=>void getAudio()}>获取本地回听音频</button>}</div>}
       {view?<><div className="text-tools"><div className="small-search"><Search size={15}/><input aria-label="搜索当前文字稿" placeholder="查找原文…" value={filter} onChange={e=>{setFilter(e.target.value);setVisible(250);}}/></div><span className="muted">{filtered.length} 个片段</span><button className="text-button" aria-pressed={excerpt} onClick={()=>{setExcerpt(!excerpt);if(excerpt)setSelected(new Set());}}>{excerpt?'退出摘录并清空选择':'摘录 / 选择片段'}</button></div>
       {excerpt&&<div className="selection-bar"><label><input type="checkbox" aria-label="选择全部原文片段" checked={displayed.length>0&&selected.size===displayed.length} onChange={()=>setSelected(selected.size===displayed.length?new Set():new Set(displayed.map(s=>s.id)))}/>全部片段</label><span>已选 {scope.segments.length} 段 · {scope.chars.toLocaleString()} 字符</span>{!!selected.size&&<button className="text-button" onClick={()=>setSelected(new Set())}>清空</button>}</div>}
       <div className="segments" ref={list}>{filtered.slice(0,visible).map(segment=><div className={`segment ${selected.has(segment.id)?'selected':''} ${highlight===segment.id?'highlighted':''}`} key={segment.id} data-segment-id={segment.id}>
@@ -92,7 +104,7 @@ export default function Reader({detail,settings,apiKeyConfigured,onBack,onChange
       </div>)}{!filtered.length&&<p className="inline-empty">没有找到匹配的原文。</p>}{filtered.length>visible&&<button className="load-more" onClick={()=>setVisible(n=>n+250)}><ChevronDown size={16}/>再显示 250 个片段（剩余 {filtered.length-visible}）</button>}</div></>:<Empty title="文字稿正在准备">处理完成后，原文、时间戳和可编辑版本会显示在这里。</Empty>}
       {busy&&<div className="reader-busy"><Spinner label={busy}/></div>}
     </section><aside className="notes-pane reader-aux" hidden={!aux} aria-label={aux==='quality'?'转录质量核对':'课程笔记'}><div className="notes-heading"><div className="actions"><button aria-pressed={aux==='notes'} onClick={()=>setAux('notes')}>笔记</button><button aria-pressed={aux==='quality'} onClick={()=>setAux('quality')}>核对</button></div><button className="text-button" onClick={()=>setAux(null)}>收起</button></div>
-      <div className="reader-quality-body" hidden={aux!=='quality'}>{view&&<IntegrityPanel key={`${view.id}-${reviewEpoch}`} assetId={detail.asset.id} transcriptId={view.id} durationMs={detail.asset.durationMs} audioPath={detail.asset.audioPath} disabled={editing||!!busy} canRetranscribe={detail.asset.sourceKind!=='subtitle'} canAdopt={active&&!editing&&!noteTitle.trim()&&!noteContent.trim()} onSeek={seekIssue} onRetranscribe={()=>void retranscribe()} onDirty={setReviewDirty} onBusy={setQualityBusy} onSummary={setQualityText} onAdopted={adopted} onGetAudio={detail.asset.sourceKind!=='subtitle'?()=>void getAudio():undefined}/>}</div>
+      <div className="reader-quality-body" hidden={aux!=='quality'}>{view&&<IntegrityPanel key={`${view.id}-${reviewEpoch}`} assetId={detail.asset.id} transcriptId={view.id} durationMs={detail.asset.durationMs} segments={view.segments} audioPath={detail.asset.audioPath} disabled={editing||!!busy} canRetranscribe={detail.asset.sourceKind!=='subtitle'} canAdopt={active&&!editing&&!noteTitle.trim()&&!noteContent.trim()} looping={!!loopRange} onLoop={loopIssue} onClearLoop={clearLoop} onSeek={seekIssue} onRetranscribe={()=>void retranscribe()} onDirty={setReviewDirty} onBusy={setQualityBusy} onSummary={setQualityText} onAdopted={adopted} onGetAudio={detail.asset.sourceKind!=='subtitle'?()=>void getAudio():undefined}/>}</div>
       <div className="reader-notes-content" hidden={aux!=='notes'}>
       <div className="note-tabs" role="tablist" aria-label="笔记工具">{[['saved','已保存'],['manual','写笔记'],['ai','AI 整理']].map(([id,label])=><button role="tab" aria-selected={noteMode===id} className={noteMode===id?'active':''} key={id} onClick={()=>setNoteMode(id as typeof noteMode)}>{label}</button>)}</div>
       <div className="notes-body">{noteMode==='saved'?(detail.notes.length?detail.notes.map(note=><article className="note" key={note.id}><div className="note-meta"><span>{note.kind==='manual'?'手写 / 摘录':note.kind==='answer'?'课程问答':'AI 学习笔记'}</span><span>{new Date(note.createdAt).toLocaleDateString('zh-CN')}</span></div><h3>{note.title}</h3>{note.stale&&<div className="stale-note">原文已更新 · 保留旧版引用，可重新整理。</div>}<NoteBody note={note} onCitation={citation=>void jump(note,citation)} onError={onError}/>{note.citations.length>0&&<details className="citations" open={note.citations.length<=4}><summary><Quote size={13}/>{note.citations.length} 处原文依据</summary>{note.citations.map(citation=><button key={citation.segmentId} onClick={()=>void jump(note,citation)}><span className="mono">{timeLabel(citation.startMs)}</span><span>{citation.text}</span></button>)}</details>}</article>):<div className="notes-empty"><NotebookPen size={25}/><h3>把理解留在课程旁</h3><p>点击「摘录 / 选择片段」选择原文，写一条笔记或整理带出处的学习材料。</p><button onClick={()=>setNoteMode('manual')}>写第一条笔记</button></div>):null}

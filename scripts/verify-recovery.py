@@ -17,6 +17,8 @@ parser.add_argument('--model-dir', required=True)
 parser.add_argument('--output', required=True)
 parser.add_argument('--device', choices=['cpu', 'cuda'], default='cuda')
 parser.add_argument('--model', default='small')
+parser.add_argument('--engine', choices=['openai-whisper', 'faster-whisper'], default='openai-whisper')
+parser.add_argument('--compute-type', default='auto')
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 output = Path(args.output).resolve()
@@ -26,6 +28,7 @@ subprocess.run([args.ffmpeg, '-hide_banner', '-loglevel', 'error', '-nostdin',
                 '-i', args.audio, '-t', '70', '-vn', '-ac', '1', '-ar', '16000',
                 '-c:a', 'pcm_s16le', str(audio)], check=True)
 request = dict(protocol_version=1, command='transcribe', job_id='recovery-test',
+               engine=args.engine, compute_type=args.compute_type,
                audio_path=str(audio), checkpoint_dir=str(output / 'checkpoints'),
                model_dir=args.model_dir, model=args.model, device=args.device,
                language='zh', threads=4, prompt='', chunk_seconds=30, allow_download=False)
@@ -77,11 +80,13 @@ assert len(ids) == len(set(ids)), 'Duplicate segments after recovery'
 replayed = run('replayed')
 assert replayed['segments'] == resumed['segments'] and replayed['resumed_chunks'] == 3
 report = dict(hardware_test='actual', model=args.model, device=args.device,
+              engine=args.engine, compute_type=resumed['compute_type'],
               audio_seconds=70, chunk_seconds=30, killed_after_chunks=1,
               resumed_chunks=resumed['resumed_chunks'],
               replayed_chunks=replayed['resumed_chunks'],
               segment_count=len(ids), checkpoint_unchanged=True, duplicate_segments=0,
               resume_wall_seconds=resumed['wall_seconds'],
-              replay_wall_seconds=replayed['wall_seconds'])
+              replay_wall_seconds=replayed['wall_seconds'],
+              replay_model_loaded=replayed['model_loaded'])
 (output / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
 print(json.dumps(report), flush=True)

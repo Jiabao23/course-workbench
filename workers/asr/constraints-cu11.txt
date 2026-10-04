@@ -1,0 +1,4 @@
+# Optional Windows CUDA 11 / cuDNN 8 environment, separate from the default worker.
+# Upstream CUDA 11 workaround: https://github.com/SYSTRAN/faster-whisper#gpu
+# Apply using uv pip install --override constraints-cu11.txt, then verify on hardware.
+ctranslate2==3.24.0

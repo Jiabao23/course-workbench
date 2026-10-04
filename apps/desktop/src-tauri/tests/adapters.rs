@@ -7,6 +7,47 @@ use course_workbench_lib::{
 use serde_json::json;
 
 #[test]
+fn engine_settings_preserve_legacy_defaults_and_separate_models() {
+    let legacy: AppSettings = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(legacy.asr_engine, "openai-whisper");
+    assert_eq!(legacy.beam_size, 1);
+    let mut settings = legacy.clone();
+    settings.asr_engine = "faster-whisper".into();
+    assert!(settings.validate().is_err());
+    let temp = tempfile::tempdir().unwrap();
+    settings.faster_python_path = temp.path().join("python.exe").to_string_lossy().into();
+    settings.faster_model_dir = temp.path().join("models").to_string_lossy().into();
+    settings.device = "cpu".into();
+    settings.compute_type = "int8".into();
+    assert!(settings.validate().is_ok());
+    std::fs::create_dir_all(std::path::Path::new(&settings.faster_model_dir).join("small"))
+        .unwrap();
+    std::fs::write(
+        std::path::Path::new(&settings.faster_model_dir).join("small/model.bin"),
+        "fixture",
+    )
+    .unwrap();
+    assert!(settings.model_available("small"));
+    assert!(!settings.model_available("base"));
+    let request = course_workbench_lib::asr::transcribe_request(
+        &settings,
+        "job",
+        temp.path(),
+        "small",
+        "cpu",
+        temp.path(),
+    );
+    assert_eq!(request["engine"], "faster-whisper");
+    assert_eq!(request["compute_type"], "int8");
+    settings.device = "cpu".into();
+    settings.compute_type = "float16".into();
+    assert!(settings.validate().is_err());
+    settings.asr_engine = "openai-whisper".into();
+    settings.compute_type = "int8".into();
+    assert!(settings.validate().is_err());
+}
+
+#[test]
 fn collection_url_is_reduced_to_a_single_video_before_any_download() {
     assert_eq!(
         extract_bvid("https://www.bilibili.com/list/ml2572578436?oid=416090103&bvid=BV1JV411t7ow")

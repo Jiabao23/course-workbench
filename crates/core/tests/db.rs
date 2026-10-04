@@ -16,6 +16,46 @@ fn database() -> (tempfile::TempDir, Db) {
 fn assert_send_sync<T: Send + Sync>() {}
 
 #[test]
+fn provenance_failure_rolls_back_transcript_index_and_terminal_job() {
+    let (_dir, db) = database();
+    db.upsert_asset(&asset("a")).unwrap();
+    db.upsert_job(&job("j", "a", "running")).unwrap();
+    let conn = rusqlite::Connection::open(db.path()).unwrap();
+    conn.execute_batch("CREATE TRIGGER fail_provenance BEFORE INSERT ON quality_evidence BEGIN SELECT RAISE(ABORT,'simulated storage failure'); END;").unwrap();
+    let segments = vec![segment("s", 0, 1000, "verified")];
+    let evidence = serde_json::json!({"engine":"faster-whisper","manifest":[]});
+    assert!(db
+        .save_job_transcript_with_evidence(
+            "j",
+            "whisper",
+            Some("small"),
+            "zh",
+            &segments,
+            Some(&evidence)
+        )
+        .is_err());
+    assert!(db.list_transcripts("a").unwrap().is_empty());
+    assert!(db.search("verified", None).unwrap().is_empty());
+    assert_eq!(db.get_job("j").unwrap().status, "running");
+    conn.execute_batch("DROP TRIGGER fail_provenance").unwrap();
+    let result = db
+        .save_job_transcript_with_evidence(
+            "j",
+            "whisper",
+            Some("small"),
+            "zh",
+            &segments,
+            Some(&evidence),
+        )
+        .unwrap();
+    assert_eq!(
+        db.quality_evidence(&result.id, "provenance").unwrap(),
+        Some(evidence)
+    );
+    assert_eq!(db.get_job("j").unwrap().status, "completed");
+}
+
+#[test]
 fn job_result_and_completion_are_committed_once_across_reopen() {
     let (directory, db) = database();
     db.upsert_asset(&asset("a")).unwrap();

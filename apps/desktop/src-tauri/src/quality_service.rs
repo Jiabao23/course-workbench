@@ -47,6 +47,64 @@ fn audio_path(asset: &Asset) -> Result<PathBuf> {
     Ok(path)
 }
 
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecheckRange {
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+fn recheck_ranges(
+    ranges: &[RecheckRange],
+    segments: &[Segment],
+    duration: u64,
+) -> Result<Vec<RecheckRange>> {
+    ensure!(
+        !ranges.is_empty() && ranges.len() <= 5,
+        "一次最多复核 5 组疑点"
+    );
+    let mut expanded = Vec::new();
+    for input in ranges {
+        let mut r = *input;
+        ensure!(
+            r.end_ms > r.start_ms && r.end_ms - r.start_ms <= 120_000 && r.end_ms <= duration,
+            "局部复核请选择课程内不超过 120 秒的范围"
+        );
+        loop {
+            let before = r;
+            for s in segments {
+                if s.start_ms < r.end_ms && s.end_ms > r.start_ms {
+                    r.start_ms = r.start_ms.min(s.start_ms);
+                    r.end_ms = r.end_ms.max(s.end_ms);
+                }
+            }
+            if before == r {
+                break;
+            }
+        }
+        ensure!(r.end_ms <= duration, "边界片段超出课程时长");
+        expanded.push(r);
+    }
+    expanded.sort_by_key(|r| r.start_ms);
+    let mut merged: Vec<RecheckRange> = Vec::new();
+    for r in expanded {
+        if let Some(last) = merged.last_mut().filter(|last| r.start_ms <= last.end_ms) {
+            last.end_ms = last.end_ms.max(r.end_ms);
+        } else {
+            merged.push(r);
+        }
+    }
+    ensure!(
+        merged.iter().all(|r| r.end_ms - r.start_ms <= 120_000),
+        "合并边界后超出 120 秒，请缩小范围"
+    );
+    ensure!(
+        merged.iter().map(|r| r.end_ms - r.start_ms).sum::<u64>() <= 300_000,
+        "一次复核音频总长不能超过 300 秒"
+    );
+    Ok(merged)
+}
+
 impl Runtime {
     fn begin_quality(&self) -> Result<QualityGuard<'_>> {
         let auxiliary = self.begin_auxiliary()?;
@@ -70,13 +128,22 @@ impl Runtime {
         let db = self.db();
         let saved = db.quality_evidence(&transcript.id, "speech")?;
         let diagnostics = db.quality_evidence(&transcript.id, "diagnostics")?;
+        let provenance = db.quality_evidence(&transcript.id, "provenance")?;
+        // Retain raw scores, but the existing thresholds were only defined for OpenAI Whisper.
+        let calibrated_engine = provenance
+            .as_ref()
+            .is_none_or(|p| p["engine"] != "faster-whisper");
         let current_hash = audio_path(asset)
             .ok()
             .and_then(|p| audio_hash(&p, &ProcessControl::default()).ok());
-        let identity = if saved.is_some() && current_hash.is_some() {
+        let identity = if current_hash.is_some() {
             self.detector_identity().ok()
         } else {
             None
+        };
+        let cached = match (&current_hash, &identity) {
+            (Some(audio), Some(detector)) => db.cached_speech(audio, detector)?,
+            _ => None,
         };
         let valid = saved.as_ref().filter(|v| {
             current_hash.as_deref() == v["audio_fingerprint"].as_str()
@@ -84,7 +151,18 @@ impl Runtime {
                 && identity.as_deref() == v["detector_identity"].as_str()
                 && identity.is_some()
         });
-        integrity::add_quality_evidence(report, transcript, valid, diagnostics.as_ref())?;
+        let valid = valid.or(cached.as_ref());
+        integrity::add_quality_evidence(
+            report,
+            transcript,
+            valid,
+            diagnostics.as_ref().filter(|_| calibrated_engine),
+        )?;
+        if !calibrated_engine {
+            report
+                .limitations
+                .push_str(" 此引擎诊断分数尚未校准，不套用原版阈值判定错字。");
+        }
         if current_hash.is_none() {
             report.audio_check = AudioCheck {
                 status: "unavailable".into(),
@@ -156,6 +234,19 @@ impl Runtime {
         ensure!(t.asset_id == asset_id, "文字版本不属于该课程");
         let path = audio_path(&asset)?;
         let before = audio_hash(&path, control)?;
+        if let Ok(identity) = self.detector_identity() {
+            if let Some(cached) = db.cached_speech(&before, &identity)? {
+                let _gate = self.mutation_gate.lock().unwrap();
+                control.check()?;
+                ensure!(
+                    audio_hash(&path, control)? == before
+                        && db.get_asset(asset_id)?.audio_path == asset.audio_path,
+                    "音频已变化，请重新检查"
+                );
+                db.save_quality_evidence(transcript_id, "speech", &cached)?;
+                return self.check_integrity(asset_id, transcript_id);
+            }
+        }
         let settings = self.settings();
         let wav = TempAudio(
             settings
@@ -187,6 +278,7 @@ impl Runtime {
             db.get_asset(asset_id)?.audio_path == asset.audio_path,
             "音频来源已变化，请重试"
         );
+        db.cache_speech(&result)?;
         db.save_quality_evidence(transcript_id, "speech", &result)?;
         self.check_integrity(asset_id, transcript_id)
     }
@@ -194,13 +286,24 @@ impl Runtime {
         &self,
         asset_id: &str,
         transcript_id: &str,
-        mut start_ms: u64,
-        mut end_ms: u64,
+        start_ms: u64,
+        end_ms: u64,
     ) -> Result<RecheckCandidate> {
-        ensure!(
-            end_ms > start_ms && end_ms - start_ms <= 120000,
-            "局部复核请选择不超过 120 秒的范围"
-        );
+        self.recheck_batch(
+            asset_id,
+            transcript_id,
+            &[RecheckRange { start_ms, end_ms }],
+        )?
+        .into_iter()
+        .next()
+        .context("没有复核结果")
+    }
+    pub fn recheck_batch(
+        &self,
+        asset_id: &str,
+        transcript_id: &str,
+        ranges: &[RecheckRange],
+    ) -> Result<Vec<RecheckCandidate>> {
         let guard = self.begin_quality()?;
         let control = &guard.auxiliary.control;
         let db = self.db();
@@ -210,26 +313,38 @@ impl Runtime {
             base.asset_id == asset_id && asset.active_version_id.as_deref() == Some(transcript_id),
             "请在当前文字版本上复核"
         );
+        let ranges = recheck_ranges(ranges, &base.segments, asset.duration_ms)?;
         let path = audio_path(&asset)?;
         let fingerprint = audio_hash(&path, control)?;
-        // Never delete the unexamined half of a boundary segment.
-        loop {
-            let before = (start_ms, end_ms);
-            for s in &base.segments {
-                if s.start_ms < end_ms && s.end_ms > start_ms {
-                    start_ms = start_ms.min(s.start_ms);
-                    end_ms = end_ms.max(s.end_ms);
-                }
-            }
-            if before == (start_ms, end_ms) {
-                break;
-            }
-        }
-        ensure!(
-            end_ms - start_ms <= 120000 && end_ms <= asset.duration_ms,
-            "包含完整边界片段后超出范围，请选择更短的区间"
-        );
         let settings = self.resolved_settings_with_control(control)?;
+        let mut results = Vec::new();
+        for range in ranges {
+            control.check()?;
+            results.push(self.recheck_range(
+                &asset,
+                &base,
+                range,
+                &settings,
+                control,
+                &fingerprint,
+            )?);
+        }
+        Ok(results)
+    }
+    fn recheck_range(
+        &self,
+        asset: &Asset,
+        base: &Transcript,
+        range: RecheckRange,
+        settings: &AppSettings,
+        control: &ProcessControl,
+        fingerprint: &str,
+    ) -> Result<RecheckCandidate> {
+        let (start_ms, end_ms) = (range.start_ms, range.end_ms);
+        let asset_id = asset.id.as_str();
+        let transcript_id = base.id.as_str();
+        let db = self.db();
+        let path = audio_path(asset)?;
         let device = settings.device.as_str();
         let id = new_id();
         let wav = TempAudio(
@@ -262,21 +377,31 @@ impl Runtime {
             Duration::from_secs(120),
         )?;
         ensure!(
-            media::duration_ms(&settings, &wav.0, control)?.abs_diff(end_ms - start_ms) < 100,
+            media::duration_ms(settings, &wav.0, control)?.abs_diff(end_ms - start_ms) < 100,
             "局部音频转换不完整"
         );
-        let request = transcribe_request(
-            &settings,
+        let mut request = transcribe_request(
+            settings,
             &id,
             &wav.0,
             &settings.model,
             device,
             &settings.cache_path("checkpoints").join("rechecks"),
         );
+        request["condition_on_previous_text"] = json!(false);
+        request["decoding_policy"] = json!("local-recheck-v2");
+        let (mut chunk_done, mut chunk_total) = (0, 0);
         let result = WhisperWorker {
             path: self.worker_path.clone(),
         }
-        .execute(&settings, request, control, &mut |_| Ok(()))?;
+        .execute(settings, request, control, &mut |message| {
+            if message["type"] == "checkpoint" {
+                chunk_done = message["chunk_done"].as_u64().unwrap_or(0) as u32;
+                chunk_total = message["chunk_total"].as_u64().unwrap_or(0) as u32;
+            }
+            Ok(())
+        })?;
+        integrity::require_asr_completion(&result, chunk_done, chunk_total, end_ms - start_ms)?;
         let segments: Vec<Segment> = result["segments"]
             .as_array()
             .context("复核结果缺少文字")?
@@ -314,7 +439,8 @@ impl Runtime {
                 .join("\n"),
             segments,
             created_at: now(),
-            audio_fingerprint: fingerprint.clone(),
+            audio_fingerprint: fingerprint.to_owned(),
+            recognition_options: json!({"engine":settings.asr_engine,"compute_type":result["compute_type"],"requested_compute_type":settings.compute_type,"beam_size":result["decode_options"]["beam_size"],"threads":settings.threads,"decode_options":result["decode_options"],"runtime_versions":result["runtime_versions"],"condition_on_previous_text":false,"decoding_policy":"local-recheck-v2","engine_version":result["engine_version"],"model_sha256":result["model_sha256"]}),
         };
         let _gate = self.mutation_gate.lock().unwrap();
         control.check()?;
@@ -342,9 +468,26 @@ impl Runtime {
         self.db().discard_candidate(candidate_id)
     }
     pub fn adopt_candidate(&self, candidate_id: &str) -> Result<Transcript> {
+        self.adopt_candidates(&[candidate_id.to_owned()])
+    }
+    pub fn adopt_candidates(&self, candidate_ids: &[String]) -> Result<Transcript> {
+        ensure!(
+            !candidate_ids.is_empty() && candidate_ids.len() <= 5,
+            "请选择 1–5 个候选"
+        );
         let _gate = self.mutation_gate.lock().unwrap();
         let db = self.db();
-        let c = db.get_candidate(candidate_id)?;
+        let candidates = candidate_ids
+            .iter()
+            .map(|id| db.get_candidate(id))
+            .collect::<Result<Vec<_>>>()?;
+        let c = &candidates[0];
+        ensure!(
+            candidates.iter().all(|other| other.asset_id == c.asset_id
+                && other.transcript_id == c.transcript_id
+                && other.audio_fingerprint == c.audio_fingerprint),
+            "候选依据不一致"
+        );
         let asset = db.get_asset(&c.asset_id)?;
         let path = audio_path(&asset)?;
         ensure!(
@@ -366,12 +509,13 @@ impl Runtime {
                     "overlap",
                 ]
                 .contains(&i.code.as_str())
-                    && i.start_ms >= c.start_ms
-                    && i.end_ms <= c.end_ms
+                    && candidates
+                        .iter()
+                        .any(|c| i.start_ms >= c.start_ms && i.end_ms <= c.end_ms)
             })
             .map(|i| i.id.clone())
             .collect();
-        db.adopt_candidate_with_reviews(candidate_id, &report.fingerprint, &issues)
+        db.adopt_candidates_with_reviews(candidate_ids, &report.fingerprint, &issues)
     }
     fn detector_identity(&self) -> Result<String> {
         let control = Arc::new(ProcessControl::default());
@@ -405,6 +549,76 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn batch_expands_boundaries_merges_and_enforces_actual_budget() {
+        let segment = Segment {
+            id: "s".into(),
+            start_ms: 10_000,
+            end_ms: 20_000,
+            text: "x".into(),
+        };
+        let ranges = [
+            RecheckRange {
+                start_ms: 11_000,
+                end_ms: 12_000,
+            },
+            RecheckRange {
+                start_ms: 18_000,
+                end_ms: 25_000,
+            },
+        ];
+        assert_eq!(
+            recheck_ranges(&ranges, &[segment], 30_000).unwrap(),
+            vec![RecheckRange {
+                start_ms: 10_000,
+                end_ms: 25_000
+            }]
+        );
+        assert!(recheck_ranges(&[], &[], 300_000).is_err());
+        assert!(recheck_ranges(
+            &[RecheckRange {
+                start_ms: 0,
+                end_ms: 120_001
+            }],
+            &[],
+            300_000
+        )
+        .is_err());
+        assert!(recheck_ranges(
+            &[
+                RecheckRange {
+                    start_ms: 0,
+                    end_ms: 120_000
+                },
+                RecheckRange {
+                    start_ms: 130_000,
+                    end_ms: 250_000
+                },
+                RecheckRange {
+                    start_ms: 260_000,
+                    end_ms: 380_000
+                }
+            ],
+            &[],
+            400_000
+        )
+        .is_err());
+        let boundary = Segment {
+            id: "s".into(),
+            start_ms: 0,
+            end_ms: 121_000,
+            text: "x".into(),
+        };
+        assert!(recheck_ranges(
+            &[RecheckRange {
+                start_ms: 10_000,
+                end_ms: 20_000
+            }],
+            &[boundary],
+            130_000
+        )
+        .is_err());
+    }
     #[test]
     fn temp_audio_removes_failed_conversion_partial() {
         let dir = tempfile::tempdir().unwrap();

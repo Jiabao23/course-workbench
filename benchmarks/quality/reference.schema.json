@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Human reviewed course reference",
+  "type": "object",
+  "required": ["schema_version", "audio_sha256", "reviewed", "reviewer", "reviewed_at", "text"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "audio_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "reviewed": {"type": "boolean"},
+    "reviewer": {"type": "string"},
+    "reviewed_at": {"type": "string"},
+    "text": {"type": "string"},
+    "terms": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "speech_intervals_ms": {"$ref": "#/$defs/intervals"},
+    "omission_intervals_ms": {"$ref": "#/$defs/intervals"}
+  },
+  "$defs": {
+    "intervals": {"type": "array", "items": {"type": "array", "prefixItems": [{"type": "integer", "minimum": 0}, {"type": "integer", "minimum": 1}], "minItems": 2, "maxItems": 2}}
+  }
+}

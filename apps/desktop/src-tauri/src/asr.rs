@@ -32,7 +32,18 @@ impl AsrEngine for WhisperWorker {
             "识别程序资源缺失，请重新安装课程工作台"
         );
         request["protocol_version"] = json!(1);
-        request["model_dir"] = json!(settings.model_dir);
+        let quality = matches!(
+            request["command"].as_str(),
+            Some("detect_speech" | "detector_identity")
+        );
+        request["model_dir"] = json!(if quality {
+            &settings.model_dir
+        } else {
+            settings.asr_models()
+        });
+        if !quality {
+            request["engine"] = json!(settings.asr_engine);
+        }
         let job_id = request["job_id"].as_str().unwrap_or("probe").to_owned();
         ensure!(
             job_id
@@ -40,7 +51,11 @@ impl AsrEngine for WhisperWorker {
                 .all(|c| c.is_ascii_alphanumeric() || c == '-'),
             "任务标识不合法"
         );
-        let mut command = process::command(&settings.python_path)?;
+        let mut command = process::command(if quality {
+            &settings.python_path
+        } else {
+            settings.asr_python()
+        })?;
         command.arg(&self.path);
         if matches!(
             request["command"].as_str(),
@@ -65,6 +80,7 @@ impl AsrEngine for WhisperWorker {
         };
         let mut done = None;
         let mut worker_error = None;
+        let worker_started = std::time::Instant::now();
         let result = process::run_lines(
             command,
             Some(input.as_bytes()),
@@ -97,7 +113,9 @@ impl AsrEngine for WhisperWorker {
             return Err(anyhow!(error));
         }
         result?;
-        done.context("识别进程未返回完成结果")
+        let mut result = done.context("识别进程未返回完成结果")?;
+        result["process_seconds"] = json!(worker_started.elapsed().as_secs_f64());
+        Ok(result)
     }
 }
 
@@ -111,5 +129,7 @@ pub fn transcribe_request(
 ) -> Value {
     json!({"command":"transcribe","job_id":job_id,"audio_path":audio,"model":model,"device":device,
         "checkpoint_dir":checkpoint_dir,"threads":settings.threads,"language":settings.language,
-        "prompt":settings.prompt,"chunk_seconds":300,"allow_download":false})
+        "prompt":settings.prompt,"chunk_seconds":300,"allow_download":false,
+        "engine":settings.asr_engine,"compute_type":settings.compute_type,"beam_size":settings.beam_size,
+        "condition_on_previous_text":true})
 }
